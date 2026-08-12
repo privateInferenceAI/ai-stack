@@ -15,6 +15,10 @@ GGUF=$(ls "$STACK"/models/*.gguf 2>/dev/null | head -1)
 [[ -f "$STACK/docker-compose.yml" ]] || { echo "ERROR: kit not untarred to $STACK"; exit 1; }
 log "gate passed: docker/GPU/ai-net/model/kit all present"
 
+# --- prepare runtime dirs Git can't track (empty dirs, permissions) ---
+log "running gittar (runtime dirs, permissions)"
+bash "$STACK/gittar.sh"
+
 # --- fresh secrets ---
 log "generating fresh .env (secrets born on this box)"
 bash "$STACK/genenv.sh"
