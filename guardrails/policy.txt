@@ -1,0 +1,13 @@
+COMPANY AI — GUARDRAILS POLICY (v1)
+
+DENIED TOPICS (input is refused with a polite redirect):
+  - payroll_individual : questions about a specific person salary or pay
+  - legal_advice       : requests for legal opinions or contract interpretation
+
+PII REDACTION (output is scanned and redacted before display):
+  - SSN pattern (###-##-####)
+
+INJECTION DEFENSE (input is refused):
+  - attempts to override instructions ("ignore previous instructions", "you are now", "system:")
+
+NOTE: these rules are enforced by CODE on every message, not by asking the AI nicely.

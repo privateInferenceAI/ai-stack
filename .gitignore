@@ -1,0 +1,19 @@
+# Secrets — never commit
+.env
+*.pem
+*.key
+
+# Runtime data — created on-box by gittar.sh or containers
+postgres-data/
+open-webui-data/
+qdrant-data/
+n8n-data/
+models/
+backups/
+
+# Ingestion image build context
+ingestion/__pycache__/
+
+# OS junk
+.DS_Store
+Thumbs.db

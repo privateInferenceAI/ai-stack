@@ -1,0 +1,214 @@
+{
+  "name": "My workflow",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "seconds"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        0,
+        0
+      ],
+      "id": "84b6de1d-0da5-4446-ab2b-67734603361e",
+      "name": "Schedule Trigger"
+    },
+    {
+      "parameters": {
+        "url": "http://mailpit:8025/api/v1/messages?limit=1",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        224,
+        0
+      ],
+      "id": "3fe38da4-f760-42e5-bc30-3cc3fe8305fd",
+      "name": "HTTP Request"
+    },
+    {
+      "parameters": {
+        "url": "=http://mailpit:8025/api/v1/message/{{ $('HTTP Request').item.json.messages[0].ID }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        448,
+        0
+      ],
+      "id": "cf04708d-8841-450f-a713-f565230ee247",
+      "name": "HTTP Request1"
+    },
+    {
+      "parameters": {
+        "text": "={{ $json.Text }}",
+        "attributes": {
+          "attributes": [
+            {
+              "name": "vendor",
+              "description": "The name of the company that sent the invoice",
+              "required": true
+            },
+            {
+              "name": "invoice_number",
+              "description": "The invoice ID or invoice number"
+            },
+            {
+              "name": "amount",
+              "type": "number",
+              "description": "The total invoice amount as a number"
+            },
+            {
+              "name": "due_date",
+              "description": "The payment due date in ISO format (YYYY-MM-DD)"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.informationExtractor",
+      "typeVersion": 1.2,
+      "position": [
+        528,
+        0
+      ],
+      "id": "eca49dcd-f547-4f85-adab-288a6f3421da",
+      "name": "Information Extractor"
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "company-ai",
+          "mode": "list",
+          "cachedResultName": "company-ai"
+        },
+        "builtInTools": {},
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [
+        464,
+        208
+      ],
+      "id": "9eeeae69-5f94-4ada-902e-e3304e06c5e7",
+      "name": "OpenAI Chat Model",
+      "credentials": {
+        "openAiApi": {
+          "id": "nv2V6r3eys104ykY",
+          "name": "OpenAI account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "sendAndWait",
+        "fromEmail": "n8n@company.test",
+        "toEmail": "approver@company.test",
+        "subject": "=Invoice approval needed: {{ $json.output.invoice_number }}",
+        "message": "=Please review this extracted invoice:\nVendor: {{ $json.output.vendor }}\nInvoice: {{ $json.output.invoice_number }}\nAmount: {{ $json.output.amount }}\nDue: {{ $json.output.due_date }}",
+        "approvalOptions": {
+          "values": {}
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        768,
+        0
+      ],
+      "id": "f820a34b-2e6c-4612-a515-dd269c9f7e6b",
+      "name": "Send an Email",
+      "webhookId": "6e457687-7604-4c08-9294-447565a0ae65",
+      "credentials": {
+        "smtp": {
+          "id": "mRHqsXSXh30M3anf",
+          "name": "SMTP account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request1": {
+      "main": [
+        [
+          {
+            "node": "Information Extractor",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Information Extractor",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Information Extractor": {
+      "main": [
+        [
+          {
+            "node": "Send an Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "versionId": "87477638-d31b-4604-b5b0-875537a45a49",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "007e6fb7d9b40e47215ad30f8eb60324e81ec297d9f8384b2debb93a2f6db055"
+  },
+  "nodeGroups": [],
+  "id": "lWzO0SgIunQKGSen",
+  "tags": []
+}

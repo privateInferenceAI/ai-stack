@@ -1,0 +1,201 @@
+services:
+  llamacpp:
+    # CHANGED: pinned to digest (was :server-cuda floating tag)
+    image: ghcr.io/ggml-org/llama.cpp@sha256:48a88af72b29e865d64f464e3dc1e4fbbad4a36c5e2298d72d13b690f9d17dd2
+    container_name: llamacpp
+    restart: unless-stopped
+    env_file: /opt/ai-stack/.env
+    ports:
+      - "8080:8080"
+    volumes:
+      - /opt/ai-stack/models:/models:ro
+    command: >
+      --model /models/Qwen3-14B-Q4_K_M.gguf
+      --host 0.0.0.0
+      --port 8080
+      --ctx-size 32768
+      --n-gpu-layers 99
+      --api-key ${LLAMA_API_KEY}
+      --flash-attn on
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    networks:
+      - ai-net
+
+  postgres:
+    image: postgres:16-alpine
+    # STABLE-INFRA PIN SNAPSHOT (recorded 2026-08-07) — fallback digests if a version tag ever misbehaves.
+    # freeze: postgres@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
+    container_name: litellm-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - /opt/ai-stack/postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    networks:
+      - ai-net
+    # Deliberately NO ports: block. Internal to ai-net only.
+
+  litellm:
+    # CHANGED: pinned to digest (was :main-stable)
+    image: ghcr.io/berriai/litellm@sha256:af806882b7a6ced41658db5b6a7e98ed7b9b51d03b935e0417bf1c8552d688af
+    container_name: litellm
+    restart: unless-stopped
+    env_file: /opt/ai-stack/.env
+    environment:
+      USE_PRISMA_MIGRATE: "true"
+    ports:
+      - "4000:4000"
+    volumes:
+      - /opt/ai-stack/litellm/config.yaml:/app/config.yaml:ro
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      llamacpp:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:4000/health/liveliness')\" || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 90s
+    networks:
+      - ai-net
+
+
+
+  open-webui:
+    # CHANGED: pinned to digest (was :main) — this is v0.11.0
+    image: ghcr.io/open-webui/open-webui@sha256:6a773e5c3a246b65cbe74ce942b294292c0e5f81c138f703d111bc162f7d7c3d
+    container_name: open-webui
+    restart: unless-stopped
+    environment:
+      OPENAI_API_BASE_URL: http://litellm:4000/v1
+      OPENAI_API_KEY: ${WEBUI_VIRTUAL_KEY}
+      WEBUI_SECRET_KEY: ${WEBUI_SECRET_KEY}
+      ENABLE_SIGNUP: "true"
+      DEFAULT_USER_ROLE: pending
+      ENABLE_MODEL_FILTER: "true"
+      MODEL_FILTER_LIST: company-ai
+      WEBUI_NAME: Company AI
+      ANONYMIZED_TELEMETRY: "false"
+    ports:
+      - "3000:8080"
+    volumes:
+      - /opt/ai-stack/open-webui-data:/app/backend/data
+    depends_on:
+      litellm:
+        condition: service_started
+    networks:
+      - ai-net
+
+  qdrant:
+    image: qdrant/qdrant:v1.11.3
+    # STABLE-INFRA PIN SNAPSHOT (recorded 2026-08-07) — fallback digests if a version tag ever misbehaves.
+    # freeze: qdrant/qdrant@sha256:da426bb8aa0ba0a3032b3110e71d0d1516d51a686aa17b39bde4e090ce3b8e7c
+    container_name: qdrant
+    restart: unless-stopped
+    environment:
+      QDRANT__SERVICE__API_KEY: ${QDRANT_API_KEY}
+    volumes:
+      - /opt/ai-stack/qdrant-data:/qdrant/storage
+    networks:
+      - ai-net
+
+  embeddings:
+    image: ghcr.io/huggingface/text-embeddings-inference:1.6
+    # STABLE-INFRA PIN SNAPSHOT (recorded 2026-08-07) — fallback digests if a version tag ever misbehaves.
+    # freeze: ghcr.io/huggingface/text-embeddings-inference@sha256:25e35b0b266241a543c5ee305083eced4b6ac0772eb969c3fdaae2d4c2ef7266
+    container_name: embeddings
+    restart: unless-stopped
+    command: --model-id BAAI/bge-m3 --port 80
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    networks:
+      - ai-net
+
+  reranker:
+    image: ghcr.io/huggingface/text-embeddings-inference:1.6
+    container_name: reranker
+    restart: unless-stopped
+    command: --model-id BAAI/bge-reranker-v2-m3 --port 80
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    networks:
+      - ai-net
+
+
+  ingestion:
+    # CHANGED: build from local Dockerfile (was image: python:3.11-slim).
+    # Packages (pypdf, python-docx, requests) baked in — no more reinstall on recreate.
+    build: ./ingestion
+    container_name: ingestion
+    environment:
+      QDRANT_URL: http://qdrant:6333
+      QDRANT_API_KEY: ${QDRANT_API_KEY}
+      EMBED_URL: http://embeddings:80
+    volumes:
+      - /opt/ai-stack/ingestion:/app
+      - /opt/ai-stack/documents:/documents:ro
+    working_dir: /app
+    command: ["tail", "-f", "/dev/null"]
+    networks:
+      - ai-net
+
+
+  n8n:
+    # CHANGED: pinned to digest (was :latest)
+    image: docker.n8n.io/n8nio/n8n@sha256:a695e1db50fe1b5acf0c8563ceeea82b099f797cfa485def02647eae1e993953
+    container_name: n8n
+    restart: unless-stopped
+    environment:
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY}
+      N8N_HOST: localhost
+      N8N_PORT: 5678
+      N8N_PROTOCOL: http
+      WEBHOOK_URL: http://localhost:5678/
+      GENERIC_TIMEZONE: UTC
+      N8N_DIAGNOSTICS_ENABLED: "false"
+    ports:
+      - "5678:5678"
+    volumes:
+      - /opt/ai-stack/n8n-data:/home/node/.n8n
+    networks:
+      - ai-net
+
+  mailpit:
+    # CHANGED: pinned to digest (was :latest)
+    image: axllent/mailpit@sha256:7f33095f80e901f6ad08028f06ca284aa58fe84942be5496008d041d3b9f4d4d
+    container_name: mailpit
+    restart: unless-stopped
+    ports:
+      - "8025:8025"
+    networks:
+      - ai-net
+
+networks:
+  ai-net:
+    external: true
