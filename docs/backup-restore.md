@@ -32,7 +32,7 @@
 | Postgres dump (keys, budgets, SpendLogs) | Whisper/speaches model cache |
 | Qdrant (all vectors), WebUI data (accounts/chats/SQLite), n8n data (workflows + encrypted credentials), source `documents/`, `exports/` (workflow JSON + function code) | |
 
-The n8n credentials decrypt on the target because `N8N_ENCRYPTION_KEY` rides inside the restored `.env`. That pair — data + key — is the whole trick. Back up one without the other and the credentials are noise.
+The n8n credentials decrypt on the target because `N8N_ENCRYPTION_KEY` is in the restored `.env`. Both must come from the same backup.
 
 ## 1.2 — backup.sh
 
@@ -123,7 +123,7 @@ tar tzf "$OUT/open-webui-data.tar.gz" | sort | uniq -d | head -5
 
 **✔ EXPECTED:** 7 items (`config/`, 5 tarballs, 1 `.sql`); config holds `docker-compose.yml`, `env`, `litellm/`, `guardrails/`, `ingest.py`, `Dockerfile`; first SQL line reads `-- PostgreSQL database dump`; **the `uniq -d` check prints nothing** (any output means the WebUI tar line named the member twice — see the NOTE in 1.2).
 
-**🟡 Live-backup caveat:** the tars run against running containers — proven fine in practice. For maximum safety in quiet hours: `docker compose stop` → backup → `docker compose start`.
+**🟡 Live-backup caveat:** the tars run against running containers — fine in practice. For maximum safety in quiet hours: `docker compose stop` → backup → `docker compose start`.
 
 ## 1.4 — Package and move it
 
@@ -304,7 +304,7 @@ Type `yes` at the prompt.
 
 ---
 
-# PART 3 — WATCH FOR THIS: RESTORING ONTO A BOX THAT ALREADY RAN A STACK
+# PART 3 — RESTORING ONTO A BOX THAT ALREADY RAN A STACK
 
 **The symptom:** the restore completes clean, every container starts, but LiteLLM crash-loops. `docker logs litellm --tail 50` ends in `httpx.ConnectError: All connection attempts failed` / `Application startup failed. Exiting.` — and `docker logs litellm-postgres --tail 20` shows:
 
@@ -348,7 +348,7 @@ curl -s http://localhost:4000/health/liveliness
 
 # PART 4 — POST-RESTORE VERIFICATION
 
-## 4.1 — The wiring should already be back. Prove it, don't rebuild it.
+## 4.1 — The wiring comes back with the data. Verify it:
 
 - [ ] **WebUI login** (`localhost:3000` via tunnel): the *old box's* admin credentials work. Chats, users, settings all present.
 - [ ] **Guardrails function:** Admin Panel → Functions → it's there, enabled, **Global**, Qdrant key still in Valves.
@@ -391,7 +391,7 @@ s = smtplib.SMTP('mailpit', 1025); s.send_message(msg); s.quit(); print('sent')
 
 n8n → Execute Workflow → pauses at the human hold → Mailpit (`localhost:8025`) → **Approve** → workflow resumes. Confirm the extraction call in SpendLogs.
 
-**TEST 4 (boxes with real documents) — the ACL wall test.** From a company-scoped session, ask something answerable only from an `executive/`-ACL document. ✔ The restricted content does **not** surface. This is the compliance demo.
+**TEST 4 (boxes with real documents) — the ACL wall test.** From a company-scoped session, ask something answerable only from an `executive/`-ACL document. ✔ The restricted content does **not** surface.
 
 ## 4.3 — If a wiring piece is missing (only then)
 
