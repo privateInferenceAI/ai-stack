@@ -1,6 +1,6 @@
 # AI STACK — SCRIPTED BUILD GUIDE
 ## Fresh client install: new secrets, new accounts, helper scripts
-**Use this for:** a brand-new install with its own identity — the client deployment.
+**Use this for:** a brand-new install with its own identity.
 **For restoring an existing box's accounts/data, use the Backup & Restore Guide.**
 **Hardware:** AWS g5.2xlarge (A10G 24GB, 8 vCPU, 32GB RAM, 200GB gp3), Ubuntu 24.04, Elastic IP, security group inbound 22 only. **~$1.21/hr running — stop the instance when idle (~$20/mo stopped).**
 
@@ -126,12 +126,11 @@ Collection points count: 2
 == VRAM used: 3141 MiB (field norm ~16,6xx; over ~21,000 = watch Bug 25)
 ```
 
-**What you just watched:**
+**Notes:**
 
-- **gittar** creates the runtime directories Git can't track (models, the four data dirs, backups), chowns **n8n-data to 1000 only**, and locks `.env` to mode 600.
-- **genenv** writes 11 keys into `.env`; `keys=11 empty=0` is the pass condition.
+- The script creates the runtime directories (gittar), writes 11 keys into `.env` (genenv — `keys=11 empty=0` is the pass condition), builds the ingestion image, starts the stack, mints and injects the two virtual keys, then seeds the two sample documents.
 - **141 migrations** on LiteLLM's first boot is one-time. Several minutes of activity is normal — do not interrupt.
-- **The VRAM line can read ~3,1xx MiB even on a perfect build.** The script checks the moment seeding ends — often before llamacpp has finished mapping the model onto the GPU. Wait a minute and confirm for yourself:
+- **The VRAM line can read ~3,1xx MiB even on a correct build.** The script checks the moment seeding ends — often before llamacpp has finished mapping the model onto the GPU. Wait a minute and confirm for yourself:
 
   ```bash
   nvidia-smi --query-gpu=memory.used,memory.total --format=csv
@@ -181,7 +180,7 @@ Do these in order. None are optional.
 sudo docker compose exec postgres psql -U litellm -d litellm -c 'SELECT count(*) FROM "LiteLLM_SpendLogs";'
 ```
 
-✔ The count grows per chat — metadata only, prompts are never stored. That row is the audit trail.
+✔ The count grows per chat — metadata only, prompts are never stored.
 
 **TEST 2 — RAG + ACL (the money test).**
 - Any user: "What is the mileage reimbursement rate?" → **67 cents per mile**
@@ -208,7 +207,7 @@ s = smtplib.SMTP('mailpit', 1025); s.send_message(msg); s.quit(); print('sent')
 
 n8n → **Execute Workflow** → flows list → body-by-ID → extract → **pauses at the human hold** → Mailpit `http://localhost:8025` → open the approval email → click **Approve** → workflow resumes. The extraction call appears in SpendLogs (model shows the backend name `openai/qwen3-14b` — the gateway translated the `company-ai` alias).
 
-**TEST 4 (boxes with real documents) — ACL wall test.** From a company-scoped session, ask something answerable only from an `executive/` document. ✔ Restricted content does not surface. This is the compliance demo.
+**TEST 4 (boxes with real documents) — ACL wall test.** From a company-scoped session, ask something answerable only from an `executive/` document. ✔ Restricted content does not surface.
 
 ---
 
@@ -601,7 +600,7 @@ cat <<DONE
 
   STACK IS UP — fresh secrets, minted keys, documents seeded into company_docs.
 
-  NOW THE BROWSER WIRING (the part that needs a human — see the guide, Stage 3):
+  NOW THE BROWSER WIRING (see the guide, Stage 3):
     1. WebUI  http://localhost:3000  → create admin (first account = admin)
     2. WebUI  → Admin → Settings → Authentication → turn OFF "Allow New Signups" → Save
     3. WebUI  → verify model dropdown shows company-ai (compose pre-wires the connection)
