@@ -1,0 +1,160 @@
+# AGENTS.md — ai-stack repo briefing
+
+## What this is
+
+**Private AI Stack**: a self-hosted, docker-compose AI stack for small businesses —
+chat UI, LLM gateway, guardrails, RAG over company documents, and workflow automation.
+
+**Hard constraint: customer data never leaves the building.**
+
+- LLM inference, embeddings, reranking, and the vector DB all run locally on one GPU host.
+- No cloud model APIs, no external runtime calls, no telemetry (explicitly disabled in
+  Open WebUI and n8n).
+- The only network egress is at *deploy time*: image pulls, apt/pip, and model downloads
+  (Qwen3 GGUF + HuggingFace embedding models).
+- Flag anything that risks this constraint before adding it.
+
+Repo: `github.com/privateInferenceAI/ai-stack`, branch `main`.
+
+## Architecture
+
+Single Docker host, **10 containers** on an external bridge network `ai-net`;
+all host state lives under `/opt/ai-stack/`.
+
+Chat request path:
+
+```
+Browser → Open WebUI :3000 → guardrails function (inlet: denial + RAG injection,
+outlet: PII redaction) → LiteLLM :4000 → llama.cpp :8080 (Qwen3-14B)
+```
+
+RAG path (inside the guardrails function):
+
+```
+query → TEI embeddings → Qdrant company_docs (role-filtered ACL) → TEI reranker
+→ top-10 chunks prepended to the user message
+```
+
+| Service | Image / build | Host port | GPU | Purpose |
+|---|---|---|---|---|
+| llamacpp | `ghcr.io/ggml-org/llama.cpp` (digest-pinned) | 8080 | ✓ | llama.cpp server, `Qwen3-14B-Q4_K_M.gguf`, ctx 32768 |
+| litellm | `ghcr.io/berriai/litellm` (digest-pinned) | 4000 | | Gateway; single model `company-ai` → `openai/qwen3-14b` @ `http://llamacpp:8080/v1` |
+| postgres | `postgres:16-alpine` | — | | LiteLLM DB (keys, spend); deliberately unpublished |
+| open-webui | `ghcr.io/open-webui/open-webui` (digest-pinned) | 3000 | | Chat UI; model-filtered to `company-ai`; signups default `pending`; telemetry off |
+| qdrant | `qdrant/qdrant:v1.11.3` | — | | Vector DB; collection `company_docs` (1024-dim, cosine) |
+| embeddings | `ghcr.io/huggingface/text-embeddings-inference:1.6` | — | ✓ | `BAAI/bge-m3` |
+| reranker | same TEI 1.6 image | — | ✓ | `BAAI/bge-reranker-v2-m3` |
+| ingestion | local build (`ingestion/`) | — | | Idle container; run `ingest.py` manually via `docker exec` |
+| n8n | `docker.n8n.io/n8nio/n8n` (digest-pinned) | 5678 | | Workflow automation; diagnostics off |
+| mailpit | `axllent/mailpit` (digest-pinned) | 8025 | | Test SMTP capture for demo workflows |
+
+Healthchecks exist only on postgres (`pg_isready`) and litellm (`/health/liveliness`).
+
+### Guardrails
+
+- `guardrails/guardrails-function.py` is an **Open WebUI Filter function**
+  (inlet/outlet pipes) — *not* a LiteLLM callback, and not mounted by compose. It is
+  installed manually in the WebUI (Admin → Functions), enabled globally, with valve
+  `QDRANT_API_KEY` set.
+- `inlet`: substring-match input denial (SSNs, prompt injection, salary probes), then
+  RAG with role ACL — `admin` role sees `company` + `executive` chunks; everyone else
+  sees `company` only. RAG errors fail open.
+- `outlet`: regex PII redaction (SSN pattern → `[REDACTED]`).
+- `guardrails/policy.txt` is the human-readable policy mirror. **Policy and code must
+  stay in sync** — see Known issues #1.
+
+### Ingestion
+
+- `documents/company/` + `documents/executive/` → text extraction (.pdf/.docx/.txt/.md)
+  → 512-char chunks (64 overlap) → bge-m3 embeddings → Qdrant `company_docs`.
+  Payload `acl` = source folder; deterministic uuid5 point IDs make re-runs idempotent.
+- Run manually: `docker exec ingestion python3 /app/ingest.py`. No scheduler (v1);
+  re-run after adding documents.
+
+## Repository layout
+
+```
+docker-compose.yml              all 10 services (requires external network `ai-net`)
+litellm/config.yaml             single local model; master key + DB URL from env
+guardrails/policy.txt           human-readable policy
+guardrails/guardrails-function.py  Open WebUI filter (installed via WebUI, not compose)
+ingestion/Dockerfile, ingest.py document → Qdrant pipeline
+documents/company/              sample all-users doc (expense policy)
+documents/executive/            sample admin-only doc (exec comp)
+exports/MyWorkflow.json         n8n demo: invoice approval w/ human gate (inactive by default)
+genenv.sh                       generates /opt/ai-stack/.env (openssl secrets, mode 600)
+gittar.sh                       creates runtime dirs Git can't track (misnomer: makes no tar)
+phase1a.sh                      OS prep + NVIDIA driver (pre-reboot)
+phase1b.sh                      Docker + NVIDIA toolkit + UFW/fail2ban + ai-net + model download
+pathb.sh                        fresh-install orchestrator: env → build → up → mint keys → seed
+backup.sh / restore.sh          on-demand backup / full restore
+docs/                           manual-build.md, scripted-build.md, backup-restore.md
+```
+
+## Build & run
+
+**Target host:** Ubuntu 24.04 + NVIDIA GPU. Dev/test box is an AWS g5.2xlarge
+(A10G 24 GB VRAM, 8 vCPU, 32 GB RAM) — size models to that ceiling. ~200 GB disk.
+
+Scripted path (canonical; full detail in `docs/scripted-build.md`):
+
+1. Copy repo contents to the **top level** of `/opt/ai-stack` (required layout).
+2. `sudo ./phase1a.sh` → reboot → `sudo ./phase1b.sh`
+   (installs Docker, NVIDIA container toolkit, UFW/fail2ban, creates `ai-net`,
+   downloads the ≈9 GB Qwen3-14B GGUF).
+3. `sudo bash ./pathb.sh` → gittar → genenv → build ingestion image →
+   `docker compose up -d` → mints LiteLLM virtual keys for WebUI/n8n → seeds Qdrant.
+   Success = `containers: 10/10`.
+4. Browser wiring (SSH-tunnel ports 3000/5678/8025): create WebUI admin account →
+   disable signups (Settings → Authentication) → import + globally enable the
+   guardrails function (set valve `QDRANT_API_KEY`) → n8n owner account → n8n OpenAI
+   credential (`http://litellm:4000/v1`, key `N8N_VIRTUAL_KEY`) + SMTP credential
+   (`mailpit:1025`, test/test, TLS off) → import `exports/MyWorkflow.json`.
+
+Manual path: `docs/manual-build.md` (the same build longhand).
+
+**Backup:** `cd /opt/ai-stack && ./backup.sh [dest]` → `backups/ai-stack-backup-<ts>/`
+capturing config (incl. `.env`), live `pg_dump`, and tarballs of qdrant/webui/n8n data,
+documents, exports — **not** the 9 GB model. **Restore:** `sudo ./restore.sh <backup-dir>`
+(requires typed `yes`). See `docs/backup-restore.md`.
+
+## Conventions
+
+- **Branches:** work on feature branches; do not commit directly to `main` unless asked.
+- **Secrets:** never commit secrets. `.env` is generated on-box by `genenv.sh`
+  (`openssl rand -hex 24`, mode 600) and gitignored, along with all runtime data dirs.
+- **Images:** prefer digest pinning (`image@sha256:…`); version tags with a freeze-digest
+  comment are the current fallback for the rest.
+- **Host layout:** everything lives at `/opt/ai-stack/` and compose runs from there —
+  compose-level `${VAR}` substitution depends on `.env` sitting in that directory.
+- **Non-GPU validation:** on machines without a GPU, limit checks to reading code,
+  `shellcheck`, `docker compose config`, and linting. Never `docker compose up`.
+- **Doc/script embedding:** `docs/manual-build.md` and `docs/scripted-build.md` embed
+  copies of the scripts and compose file — update the embedded copies when editing the
+  real files (drift already exists; see below).
+
+## Known issues / gotchas
+
+1. **Policy/code mismatch:** `policy.txt` denies legal-advice topics, but the guardrails
+   code has no legal-related keywords.
+2. **`restore.sh` is missing the postgres role-password sync** (`ALTER USER litellm …`)
+   that `backup-restore.md` claims it has — warm-box restores crash-loop LiteLLM on auth.
+3. **README layout error:** the guardrails function lives in `guardrails/`, not `exports/`.
+4. **Doc/script drift:** repo `phase1b.sh`/`pathb.sh` banners are older than the copies
+   embedded in `scripted-build.md` (wrong signups-toggle location, missing SMTP step).
+5. **llamacpp :8080 is published on the host** — bypasses LiteLLM and the guardrails;
+   docs note it should be removed at lock-down.
+6. **First-boot egress:** TEI containers download `bge-m3` / `bge-reranker-v2-m3` from
+   HuggingFace on first start — needs network access or pre-cached models at deploy time.
+7. **Startup race:** litellm depends on llamacpp with `service_started` only; the 9 GB
+   model takes a while to load, and llamacpp has no healthcheck.
+8. **No ingestion scheduler** and **no automated guardrails install** — both are manual.
+9. **Dangling `Bug N` comments** in scripts refer to an external field log not in the repo.
+
+## Canary answers (smoke-testing RAG + ACL)
+
+- Expense-policy mileage rate: **67 cents/mile** (`company` ACL — any user should get this).
+- CEO base salary: **$425,000** (`executive` ACL — admin only; non-admins must *not* see it).
+
+Roadmap notes (from README/docs): Whisper voice via speaches (would be container #11),
+OCR ingestion, 48 GB GPU tier.
