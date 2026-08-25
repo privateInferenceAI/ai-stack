@@ -1041,7 +1041,7 @@ cd /opt/ai-stack && sudo docker compose up -d --force-recreate open-webui n8n
 sudo docker logs embeddings 2>&1 | tail -3
 ```
 
-✔ EXPECTED: ends in `Ready`. First boot downloads ~2.3GB of weights with **no progress bar** — quiet is normal. The `WARN ... Invalid hostname, defaulting to 0.0.0.0` line just before `Ready` is cosmetic.
+✔ EXPECTED: ends in `Ready`. Weights are pre-downloaded (section 10) and the containers run `HF_HUB_OFFLINE=1`, so `Ready` should appear quickly with **no download lines**. The `WARN ... Invalid hostname, defaulting to 0.0.0.0` line just before `Ready` is cosmetic.
 
 ## 7.2 — Run the ingestion
 
@@ -1149,7 +1149,7 @@ n8n → Execute Workflow → pauses at the human hold → Mailpit `http://localh
 | Minting | `sk-` keys come from a LIVE LiteLLM (`/key/generate`), not openssl. Wait for `"I'm alive!"` first. |
 | Bearer | API key fields take the RAW `sk-`, not `Bearer sk-`. The app adds the header. |
 | ENABLE_SIGNUP true | Intentional until the admin exists. Then OFF in the UI; `pending` role is the backstop. |
-| TEI wait | `Ready` before ingesting; first boot downloads weights with no progress bar. |
+| TEI wait | `Ready` before ingesting; weights are pre-downloaded (§10) and `HF_HUB_OFFLINE=1` is set, so no download lines should appear. |
 | VRAM timing | ~3,1xx MiB right after launch = model still loading. Norm ~16,629 MiB. |
 
-**Startup noise that is NOT a fault:** `register_model ... not in cost map`; Prisma "wolfi" warning; Postgres `locale`/`trust auth` hints; 141 migrations first boot; TEI download with no progress bar; TEI `Invalid hostname, defaulting to 0.0.0.0`; llama.cpp `LLAMA_ARG_*`/`LLAMA_API_KEY` "overwritten by command line argument" warnings; llama.cpp future-port-9931 deprecation notice; fail2ban Python `SyntaxWarning` wall; HF unauthenticated + CLI upsell; `aplay command not found`; `udevadm hwdb is deprecated`; model logged as backend name `openai/qwen3-14b` (clients use the alias); `/opt/containerd` exists (Docker's runtime dir, not yours).
+**Startup noise that is NOT a fault:** `register_model ... not in cost map`; Prisma "wolfi" warning; Postgres `locale`/`trust auth` hints; 141 migrations first boot; TEI `Invalid hostname, defaulting to 0.0.0.0`; llama.cpp `LLAMA_ARG_*`/`LLAMA_API_KEY` "overwritten by command line argument" warnings; llama.cpp future-port-9931 deprecation notice; fail2ban Python `SyntaxWarning` wall; HF unauthenticated + CLI upsell; `aplay command not found`; `udevadm hwdb is deprecated`; model logged as backend name `openai/qwen3-14b` (clients use the alias); `/opt/containerd` exists (Docker's runtime dir, not yours).
