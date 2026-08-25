@@ -982,6 +982,18 @@ curl -s http://localhost:4000/health/liveliness
 
 ✔ EXPECTED: `"I'm alive!"`. Not yet? Wait 15s, retry — migrations still running. Don't proceed until this answers.
 
+## 6.1b — Wait for the model (containers up ≠ model loaded)
+
+LiteLLM can answer `"I'm alive!"` while the 9 GB model is still mapping onto the GPU — chats in that window fail upstream. Probe the backend from **inside `ai-net`** (the litellm container ships python3). This is the exact path production uses, and it keeps working after the llamacpp host port is removed at lock-down:
+
+▶ TERMINAL:
+```bash
+LLAMA_KEY=$(sudo grep '^LLAMA_API_KEY=' /opt/ai-stack/.env | cut -d= -f2-)
+sudo docker exec litellm python3 -c "import urllib.request; urllib.request.urlopen(urllib.request.Request('http://llamacpp:8080/health', headers={'Authorization': 'Bearer $LLAMA_KEY'}), timeout=5)" && echo MODEL READY
+```
+
+✔ EXPECTED: `MODEL READY`. A traceback/503 means still loading — wait 15s and retry (first boot takes a minute or two). Don't proceed until this answers.
+
 ## 6.2 — Read the master key, mint two virtual keys
 
 ▶ TERMINAL:
