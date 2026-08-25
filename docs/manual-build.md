@@ -670,6 +670,12 @@ services:
     container_name: llamacpp
     restart: unless-stopped
     env_file: /opt/ai-stack/.env
+    # DEBUG PORT (build-time only): published so you can curl llama.cpp directly
+    # while bringing the stack up. NOT needed at runtime — LiteLLM reaches llamacpp
+    # over the ai-net network. Direct access bypasses guardrails + LiteLLM logging
+    # (api-key still required), and Docker-published ports bypass UFW, so on-prem
+    # this IS reachable from the LAN. LOCK-DOWN (issue #2): delete these two lines
+    # or change to "127.0.0.1:8080:8080".
     ports:
       - "8080:8080"
     volumes:
@@ -869,7 +875,7 @@ grep -c 'container_name' docker-compose.yml
 - **Pinning strategy:** 5 volatile tools digest-pinned (llamacpp, litellm, open-webui, n8n, mailpit); 4 stable-infra version-pinned with digest fallbacks in comments (postgres, qdrant, the TEI image shared by embeddings + reranker, python via the ingestion build); 1 local build (ingestion).
 - **env_file scoping:** only llamacpp and litellm get `env_file`. Everyone else gets explicit `environment:` entries. WebUI must never see `DATABASE_URL` — it would connect to LiteLLM's Postgres and crash-loop; WebUI uses its own SQLite.
 - **`ENABLE_SIGNUP: "true"` is intentional** — it's how you create the admin in Part 9. `DEFAULT_USER_ROLE: pending` is the backstop. Don't change it before the admin exists or you'll lock yourself out of admin creation.
-- **8080 stays published** on llamacpp for now (the firewall and security group block it externally anyway). Remove at final production lock-down.
+- **8080 stays published** on llamacpp for build-time debugging (direct curl to llama.cpp while bringing the stack up). It is not needed at runtime — LiteLLM reaches llamacpp over the internal `ai-net` network. On AWS the security group blocks it externally, but **UFW does not block Docker-published ports** (Docker inserts its own iptables rules), so on an on-prem box it is reachable from the LAN — api-key required, but that path bypasses guardrails and LiteLLM logging. Remove at production lock-down (delete the `ports:` entry or bind `127.0.0.1`) — tracked in GitHub issue #2.
 - The litellm healthcheck uses python3 because the image ships no wget.
 - The `$${POSTGRES_USER}` inside the postgres healthcheck is correct as written — inside a compose healthcheck, `$$` escapes to a literal `$` for the container shell.
 
