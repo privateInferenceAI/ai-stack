@@ -407,18 +407,21 @@ else
   log "ai-net created."
 fi
 
-# --- 5. Model download (re-downloaded on every fresh box; never backed up) ---
+# --- 5. Model downloads (models are NOT in backups — re-download on fresh boxes) ---
+# hf CLI: user-level pip install; all downloads run as the real user, not root.
+sudo apt install -y python3-pip
+sudo -u "$$OWNER" env HOME="$$OWNER_HOME" python3 -m pip install --user --break-system-packages huggingface_hub
+HF_BIN="$OWNER_HOME/.local/bin/hf"
+if [[ ! -x "$$HF_BIN" && -x "$$OWNER_HOME/.local/bin/huggingface-cli" ]]; then
+  HF_BIN="$OWNER_HOME/.local/bin/huggingface-cli"
+fi
+
+# 5a. LLM GGUF
 MODEL="$STACK/models/Qwen3-14B-Q4_K_M.gguf"
 if [[ -f "$$MODEL" ]] && head -c 4 "$$MODEL" 2>/dev/null | grep -q GGUF; then
   log "Model already present and valid, skipping download."
 else
   log "Downloading Qwen3-14B Q4_K_M (~9GB, this is the long pole)..."
-  sudo apt install -y python3-pip
-  sudo -u "$$OWNER" env HOME="$$OWNER_HOME" python3 -m pip install --user --break-system-packages huggingface_hub
-  HF_BIN="$OWNER_HOME/.local/bin/hf"
-  if [[ ! -x "$$HF_BIN" && -x "$$OWNER_HOME/.local/bin/huggingface-cli" ]]; then
-    HF_BIN="$OWNER_HOME/.local/bin/huggingface-cli"
-  fi
   sudo -u "$$OWNER" env HOME="$$OWNER_HOME" "$$HF_BIN" download Qwen/Qwen3-14B-GGUF Qwen3-14B-Q4_K_M.gguf --local-dir "$$STACK/models"
 fi
 if head -c 4 "$MODEL" 2>/dev/null | grep -q GGUF; then
@@ -426,6 +429,21 @@ if head -c 4 "$MODEL" 2>/dev/null | grep -q GGUF; then
 else
   log "WARNING: model file missing or header check failed. Check $MODEL before proceeding."
 fi
+
+# 5b. TEI models (embeddings + reranker) — pre-downloaded into an HF cache at
+# $$STACK/models/tei, mounted at /data in the TEI containers (which also run with
+# HF_HUB_OFFLINE=1). Without this, TEI downloads from HuggingFace at first boot —
+# which may be an offline client LAN — and re-downloads on every container recreate.
+for REPO in BAAI/bge-m3 BAAI/bge-reranker-v2-m3; do
+  NAME="$${REPO##*/}"
+  SNAP="$$STACK/models/tei/models--$${REPO/\//--}/snapshots"
+  if compgen -G "$$SNAP/*/model.safetensors" >/dev/null || compgen -G "$$SNAP/*/pytorch_model.bin" >/dev/null; then
+    log "TEI model $$NAME already cached, skipping."
+  else
+    log "Downloading TEI model $$REPO..."
+    sudo -u "$$OWNER" env HOME="$$OWNER_HOME" HF_HUB_CACHE="$$STACK/models/tei" "$$HF_BIN" download "$$REPO"
+  fi
+done
 
 # --- 6. Verification summary ---
 log "=== Phase 1b verification ==="
@@ -437,6 +455,7 @@ fi
 log "Docker version: $(sudo docker --version 2>/dev/null || echo 'n/a')"
 log "Compose version: $(sudo docker compose version 2>/dev/null || echo 'n/a')"
 log "Driver (host): ${DRIVER_VER}"
+log "TEI cache: $(ls "$STACK/models/tei" 2>/dev/null | tr '\n' ' ')"
 
 log "=== Phase 1b complete ==="
 echo

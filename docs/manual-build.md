@@ -171,6 +171,16 @@ head -c 4 /opt/ai-stack/models/Qwen3-14B-Q4_K_M.gguf; echo
 ```
 → ~8–9 GB file; prints `GGUF`.
 
+**TEI models (embeddings + reranker) — same idea, smaller downloads.** Pre-download them now so the TEI containers never touch the network at boot (compose mounts this cache at `/data` and sets `HF_HUB_OFFLINE=1`):
+
+▶ TERMINAL (still as ubuntu, no sudo):
+```bash
+HF_HUB_CACHE=/opt/ai-stack/models/tei ~/.local/bin/hf download BAAI/bge-m3
+HF_HUB_CACHE=/opt/ai-stack/models/tei ~/.local/bin/hf download BAAI/bge-reranker-v2-m3
+```
+
+✔ EXPECTED: two HF cache trees under `/opt/ai-stack/models/tei` (`models--BAAI--bge-m3`, `models--BAAI--bge-reranker-v2-m3`). Without these, embeddings/reranker try to download from HuggingFace at first boot — and fail on an offline client LAN.
+
 ## 11. Final verification
 
 ▶ TERMINAL:
@@ -782,7 +792,14 @@ services:
     # ghcr.io/huggingface/text-embeddings-inference@sha256:25e35b0b266241a543c5ee305083eced4b6ac0772eb969c3fdaae2d4c2ef7266
     container_name: embeddings
     restart: unless-stopped
+    # Weights pre-downloaded in section 10 into /opt/ai-stack/models/tei (HF cache
+    # layout), mounted at TEI's cache dir /data. HF_HUB_OFFLINE makes "no egress
+    # at boot" enforced, not aspirational — TEI never touches the network.
     command: --model-id BAAI/bge-m3 --port 80
+    environment:
+      - HF_HUB_OFFLINE=1
+    volumes:
+      - /opt/ai-stack/models/tei:/data:ro
     deploy:
       resources:
         reservations:
@@ -797,7 +814,12 @@ services:
     image: ghcr.io/huggingface/text-embeddings-inference:1.6
     container_name: reranker
     restart: unless-stopped
+    # Same preload story as the embeddings service above (digest comment there covers both).
     command: --model-id BAAI/bge-reranker-v2-m3 --port 80
+    environment:
+      - HF_HUB_OFFLINE=1
+    volumes:
+      - /opt/ai-stack/models/tei:/data:ro
     deploy:
       resources:
         reservations:
