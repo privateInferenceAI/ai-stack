@@ -217,6 +217,14 @@ n8n → **Execute Workflow** → flows list → body-by-ID → extract → **pau
 
 ---
 
+## LOCK-DOWN (before this build goes to a client)
+
+- **llamacpp :8080** is published for build-time debugging only (direct curl to llama.cpp). Runtime traffic goes WebUI → LiteLLM → llamacpp over the internal `ai-net` network, so nothing legitimate needs that port. Delete the llamacpp `ports:` entry in docker-compose.yml, or bind it to localhost (`"127.0.0.1:8080:8080"`). **UFW does not block Docker-published ports** — on-prem, :8080 is reachable from the LAN until you do this.
+- Same audit for **litellm :4000** (likely localhost-only; WebUI/n8n reach it over `ai-net`) and **mailpit :8025** (keep LAN-reachable only if approvers must click Approve in Mailpit).
+- Tracked in GitHub issue #2.
+
+---
+
 ## TROUBLESHOOTING QUICK TABLE
 
 | Symptom | Fix |
