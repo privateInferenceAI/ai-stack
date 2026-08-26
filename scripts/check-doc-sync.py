@@ -6,8 +6,10 @@ BYTE-EXACT mirrors of the real files — this script verifies that, and can
 also regenerate the embedded copies from the real files.
 
 Recognized embedding styles:
-  A) docs/scripted-build.md appendix: a '### <name>.sh — …' heading followed by
-     a ```bash fenced block holding the whole script.
+  A) fenced scripts (docs/scripted-build.md appendix, docs/backup-restore.md):
+     a ##/### heading mentioning <name>.sh, followed by a ```bash fenced block
+     that starts with a shebang (the shebang distinguishes full-script embeds
+     from prose snippets).
   B) docs/manual-build.md: 'cat > /opt/ai-stack/<path> << 'EOF'' heredoc blocks.
 
 Usage:
@@ -31,33 +33,38 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 
-DOCS = {
-    "appendix": REPO / "docs" / "scripted-build.md",
-    "heredoc": REPO / "docs" / "manual-build.md",
-}
+DOCS = [
+    ("fenced", REPO / "docs" / "scripted-build.md"),
+    ("fenced", REPO / "docs" / "backup-restore.md"),
+    ("heredoc", REPO / "docs" / "manual-build.md"),
+]
 
 OPT_PREFIX = "/opt/ai-stack/"
 
 
-def extract_appendix_scripts(lines: list[str]):
-    """Style A blocks -> (name, heading_lineno, content_start_idx, content_end_idx)."""
+def extract_fenced_scripts(lines: list[str]):
+    """Style A blocks -> (name, heading_lineno, content_start_idx, content_end_idx).
+
+    A ##/### heading mentioning <name>.sh, followed by a ```bash block whose first
+    line is a shebang (full-script embeds only; prose snippets are skipped).
+    """
     blocks = []
     i = 0
     while i < len(lines):
-        m = re.match(r"^### (\S+\.sh)\b", lines[i])
+        m = re.match(r"^#{2,3}\s+.*?([A-Za-z0-9_\-]+\.sh)\b", lines[i])
         if m:
             name, start = m.group(1), i + 1
             j = i + 1
             while j < len(lines) and not lines[j].startswith("```bash"):
                 j += 1
             if j >= len(lines):
-                print(f"WARNING: line {start}: '{name}' heading has no ```bash block")
                 i += 1
                 continue
             k = j + 1
             while k < len(lines) and not lines[k].startswith("```"):
                 k += 1
-            blocks.append((name, start, j + 1, k))
+            if k > j + 1 and lines[j + 1].startswith("#!"):
+                blocks.append((name, start, j + 1, k))
             i = k
         i += 1
     return blocks
@@ -88,10 +95,10 @@ def repo_rel(box_path: str) -> str | None:
 
 def collect():
     """Yield (doc, doc_lines, start_lineno, content_start, content_end, repo_rel, embedded)."""
-    for kind, doc in DOCS.items():
+    for kind, doc in DOCS:
         lines = doc.read_text().splitlines()
-        if kind == "appendix":
-            for name, start, cs, ce in extract_appendix_scripts(lines):
+        if kind == "fenced":
+            for name, start, cs, ce in extract_fenced_scripts(lines):
                 yield doc, lines, start, cs, ce, name, lines[cs:ce]
         else:
             for box_path, start, cs, ce in extract_heredocs(lines):

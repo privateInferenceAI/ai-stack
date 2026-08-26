@@ -250,11 +250,18 @@ cat > /opt/ai-stack/ingestion/ingest.py << 'EOF'
 #!/usr/bin/env python3
 """
 Document ingestion for the AI stack document brain.
-Reads PDFs/DOCX from /documents/<acl_folder>/, chunks, embeds, stores in Qdrant with ACL tags.
-Usage: python3 ingest.py
+Reads PDFs/DOCX/TXT/MD from /documents/<acl_folder>/, chunks, embeds, stores in Qdrant with ACL tags.
+Runs on a schedule inside the ingestion container (every INGEST_INTERVAL_SECONDS,
+default 900s) and is also runnable manually: docker exec ingestion python3 /app/ingest.py
+
+Scheduled-worker support:
+- sha256 manifest at /app/.ingest-manifest.json — unchanged document set = free no-op cycle.
+- Deletion reconciliation — files removed or changed since the last successful run
+  lose all their Qdrant points before re-ingestion (no stale answers from deleted
+  documents, no orphaned tail chunks from shortened files).
 Idempotent: re-running re-embeds and overwrites by document name (safe to re-run).
 """
-import os, sys, uuid, glob
+import os, sys, uuid, glob, json, hashlib
 import requests
 
 # --- Config (from environment) ---
@@ -268,6 +275,8 @@ CHUNK_OVERLAP = 64
 VECTOR_SIZE = 1024      # bge-m3 output dimension
 
 HEADERS = {"api-key": QDRANT_API_KEY, "Content-Type": "application/json"}
+
+MANIFEST_PATH = "/app/.ingest-manifest.json"   # lives on the host mount; survives recreates
 
 def extract_text(path):
     """Pull raw text from PDF or DOCX."""
@@ -352,8 +361,64 @@ def ingest_file(path, acl):
     print(f"  OK: {len(points)} chunks from {filename}")
     return len(points)
 
+# ---------------- scheduled-worker support ----------------
+
+def sha256_file(path):
+    h = hashlib.new("sha256")
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(1 << 20), b""):
+            h.update(block)
+    return h.hexdigest()
+
+def scan_documents():
+    """{relpath: sha256} for every file under the ACL folders (same glob ingestion uses)."""
+    manifest = {}
+    for acl in ("company", "executive"):
+        folder = os.path.join(DOCS_ROOT, acl)
+        for path in sorted(glob.glob(os.path.join(folder, "*.*"))):
+            try:
+                manifest[os.path.relpath(path, DOCS_ROOT)] = sha256_file(path)
+            except OSError as e:
+                print(f"  WARNING: cannot read {path}: {e}", file=sys.stderr)
+    return manifest
+
+def load_manifest():
+    try:
+        with open(MANIFEST_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+def save_manifest(manifest):
+    with open(MANIFEST_PATH, "w", encoding="utf-8") as f:
+        json.dump(manifest, f, indent=1, sort_keys=True)
+
+def delete_by_source(filename):
+    """Remove all Qdrant points whose payload 'source' is <filename>."""
+    body = {"filter": {"must": [{"key": "source", "match": {"value": filename}}]}}
+    r = requests.post(f"{QDRANT_URL}/collections/{COLLECTION}/points/delete",
+                      headers=HEADERS, json=body, timeout=60)
+    r.raise_for_status()
+
 def main():
+    new_manifest = scan_documents()
+    old_manifest = load_manifest()
+    if old_manifest == new_manifest:
+        print("No document changes since last run; nothing to do.")
+        return
+
     ensure_collection()
+
+    # Deletion reconciliation: files removed from disk, or changed since the last
+    # successful run, lose ALL their points before re-ingestion. (Basename collision
+    # caveat: payload source is the basename, as are the uuid5 point ids — same-named
+    # files in company/ and executive/ were already sharing an id space.)
+    stale = [rel for rel in old_manifest
+             if rel not in new_manifest or old_manifest[rel] != new_manifest[rel]]
+    for rel in stale:
+        delete_by_source(os.path.basename(rel))
+        print(f"Removed stale chunks for: {rel}")
+
     total = 0
     for acl in ("company", "executive"):
         folder = os.path.join(DOCS_ROOT, acl)
@@ -362,7 +427,9 @@ def main():
                 total += ingest_file(path, acl)
             except Exception as e:
                 print(f"  ERROR on {path}: {e}", file=sys.stderr)
-    print(f"\nDone. Total chunks upserted: {total}")
+
+    save_manifest(new_manifest)   # only after a fully successful pass
+    print(f"\nDone. Total chunks upserted: {total}; stale sources removed: {len(stale)}")
     # Show collection stats
     r = requests.get(f"{QDRANT_URL}/collections/{COLLECTION}", headers=HEADERS, timeout=30)
     info = r.json().get("result", {})
@@ -378,7 +445,7 @@ EOF
 python3 -c "compile(open('/opt/ai-stack/ingestion/ingest.py').read(), 'ingest.py', 'exec'); print('SYNTAX OK')"
 ```
 
-✔ EXPECTED: `SYNTAX OK`. (This is v1 — the base-build script. The extended version with recursion, batched embedding, and OCR handling belongs to the voice/ingestion upgrade, documented separately.)
+✔ EXPECTED: `SYNTAX OK`. (Base-build script with scheduled-worker support — manifest change-detection + deletion reconciliation. The extended version with recursion, more file types, and OCR handling belongs to the ingestion upgrade, documented separately.)
 
 ## 3.3 — litellm/config.yaml
 
@@ -867,15 +934,21 @@ services:
     # Packages (pypdf, python-docx, requests) baked in — no more reinstall on recreate.
     build: ./ingestion
     container_name: ingestion
+    restart: unless-stopped
     environment:
       QDRANT_URL: http://qdrant:6333
       QDRANT_API_KEY: ${QDRANT_API_KEY}
       EMBED_URL: http://embeddings:80
+      INGEST_INTERVAL_SECONDS: ${INGEST_INTERVAL_SECONDS:-900}
     volumes:
       - /opt/ai-stack/ingestion:/app
       - /opt/ai-stack/documents:/documents:ro
     working_dir: /app
-    command: ["tail", "-f", "/dev/null"]
+    # Periodic worker: ingest at start, then every INGEST_INTERVAL_SECONDS (tune via
+    # .env). ingest.py no-ops cheaply when the document set is unchanged (sha256
+    # manifest) and removes Qdrant chunks of deleted/changed files. Immediate run:
+    #   docker exec ingestion python3 /app/ingest.py
+    command: sh -c 'while true; do python3 /app/ingest.py || echo "ingest run failed — retrying next cycle"; sleep "$$INGEST_INTERVAL_SECONDS"; done'
     networks:
       - ai-net
 
@@ -1112,7 +1185,7 @@ Done. Total chunks upserted: 2
 Collection points count: 2
 ```
 
-The collection must be size **1024** (bge-m3's output). A vector-dimension error means a wrong-size collection already exists — delete and recreate it. The script takes no arguments; it walks `/documents/company` and `/documents/executive` itself and tags `acl` from the folder name.
+The collection must be size **1024** (bge-m3's output). A vector-dimension error means a wrong-size collection already exists — delete and recreate it. The script takes no arguments; it walks `/documents/company` and `/documents/executive` itself and tags `acl` from the folder name. After this first manual run, the ingestion **worker** takes over: it re-runs `ingest.py` every `INGEST_INTERVAL_SECONDS` (default 900; tune via `.env`), no-ops when nothing changed (sha256 manifest), and removes chunks for deleted or changed files. Later document drops need no command — wait for the next cycle, or re-run the exec for immediate pickup.
 
 ---
 

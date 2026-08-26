@@ -53,7 +53,8 @@ over-broad patterns mangle normal answers.
 ## Document ACL per client
 
 - A document's ACL is its **folder name** under `/opt/ai-stack/documents/`
-  (`company/` vs `executive/` today). After moving/adding documents, re-run:
+  (`company/` vs `executive/` today). After moving/adding documents, either wait for
+  the ingestion worker's next cycle (default 15 min) or run immediately:
   `docker exec ingestion python3 /app/ingest.py`
 - `executive_roles` maps WebUI roles → executive visibility.
 - Adding a **third tier** (e.g. `hr/`) is a *code* change, not a valve: new folder,

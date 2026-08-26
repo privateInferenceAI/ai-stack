@@ -44,7 +44,7 @@ query → TEI embeddings → Qdrant company_docs (role-filtered ACL) → TEI rer
 | qdrant | `qdrant/qdrant:v1.11.3` | — | | Vector DB; collection `company_docs` (1024-dim, cosine) |
 | embeddings | `ghcr.io/huggingface/text-embeddings-inference:1.6` | — | ✓ | `BAAI/bge-m3` |
 | reranker | same TEI 1.6 image | — | ✓ | `BAAI/bge-reranker-v2-m3` |
-| ingestion | local build (`ingestion/`) | — | | Idle container; run `ingest.py` manually via `docker exec` |
+| ingestion | local build (`ingestion/`) | — | | Periodic worker (default every 900s) with manifest no-op + deletion reconciliation; manual run via `docker exec` |
 | n8n | `docker.n8n.io/n8nio/n8n` (digest-pinned) | 5678 | | Workflow automation; diagnostics off |
 | mailpit | `axllent/mailpit` (digest-pinned) | 8025 | | Test SMTP capture for demo workflows |
 
@@ -68,8 +68,10 @@ Healthchecks exist only on postgres (`pg_isready`) and litellm (`/health/livelin
 - `documents/company/` + `documents/executive/` → text extraction (.pdf/.docx/.txt/.md)
   → 512-char chunks (64 overlap) → bge-m3 embeddings → Qdrant `company_docs`.
   Payload `acl` = source folder; deterministic uuid5 point IDs make re-runs idempotent.
-- Run manually: `docker exec ingestion python3 /app/ingest.py`. No scheduler (v1);
-  re-run after adding documents.
+- Runs automatically every `INGEST_INTERVAL_SECONDS` (default 900s, `.env`-tunable)
+  in the ingestion container; a sha256 manifest makes unchanged cycles free, and
+  chunks of deleted/changed files are removed. Immediate run:
+  `docker exec ingestion python3 /app/ingest.py`.
 
 ## Repository layout
 
@@ -139,10 +141,10 @@ documents, exports — **not** the 9 GB model. **Restore:** `sudo ./restore.sh <
 1. **llamacpp :8080 is published on the host** as a build-time debug port — bypasses
    LiteLLM and the guardrails. Documented in compose + both guides; removal or
    localhost-bind at production lock-down is tracked in GitHub issue #2.
-2. **No ingestion scheduler** and **no automated guardrails install** — both are
-   manual (re-run `docker exec ingestion python3 /app/ingest.py` after adding
-   documents; install/tune the filter via WebUI → Functions — see
-   `docs/guardrails-customization.md`).
+2. **No automated guardrails install** — the filter is installed/tuned manually via
+   WebUI → Functions (see `docs/guardrails-customization.md`). An API-script
+   approach is parked in issue #14 (kept manual on purpose until the manual
+   process is well understood).
 3. **Healthchecks exist only on postgres and litellm.** pathb.sh gates installs on
    llamacpp model-ready + TEI Ready, but a compose-level llamacpp healthcheck
    (→ `depends_on: service_healthy`) is pending the curl/wget image check in issue #5.
@@ -151,8 +153,9 @@ Recently resolved (kept for context): policy/code `legal_advice` mismatch (polic
 v1.1 + `docs/guardrails-customization.md`), restore.sh postgres password sync,
 README `exports/` layout, doc/script drift (byte-exact + guarded by
 `scripts/check-doc-sync.py`), TEI first-boot egress (pre-download +
-`HF_HUB_OFFLINE=1`), the llamacpp startup race (pathb model-ready wait), and the
-dangling `Bug N` comments.
+`HF_HUB_OFFLINE=1`), the llamacpp startup race (pathb model-ready wait), the
+dangling `Bug N` comments, and ingestion scheduling (periodic worker + manifest
++ deletion reconciliation).
 
 ## Canary answers (smoke-testing RAG + ACL)
 
@@ -160,4 +163,4 @@ dangling `Bug N` comments.
 - CEO base salary: **$425,000** (`executive` ACL — admin only; non-admins must *not* see it).
 
 Roadmap notes (from README/docs): Whisper voice via speaches (would be container #11),
-OCR ingestion, 48 GB GPU tier.
+richer file-type + OCR ingestion (dedicated pipeline), 48 GB GPU tier.

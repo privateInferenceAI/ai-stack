@@ -173,15 +173,21 @@ services:
     # Packages (pypdf, python-docx, requests) baked in — no more reinstall on recreate.
     build: ./ingestion
     container_name: ingestion
+    restart: unless-stopped
     environment:
       QDRANT_URL: http://qdrant:6333
       QDRANT_API_KEY: ${QDRANT_API_KEY}
       EMBED_URL: http://embeddings:80
+      INGEST_INTERVAL_SECONDS: ${INGEST_INTERVAL_SECONDS:-900}
     volumes:
       - /opt/ai-stack/ingestion:/app
       - /opt/ai-stack/documents:/documents:ro
     working_dir: /app
-    command: ["tail", "-f", "/dev/null"]
+    # Periodic worker: ingest at start, then every INGEST_INTERVAL_SECONDS (tune via
+    # .env). ingest.py no-ops cheaply when the document set is unchanged (sha256
+    # manifest) and removes Qdrant chunks of deleted/changed files. Immediate run:
+    #   docker exec ingestion python3 /app/ingest.py
+    command: sh -c 'while true; do python3 /app/ingest.py || echo "ingest run failed — retrying next cycle"; sleep "$$INGEST_INTERVAL_SECONDS"; done'
     networks:
       - ai-net
 

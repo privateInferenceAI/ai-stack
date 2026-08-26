@@ -14,6 +14,9 @@ backups/
 # Python bytecode (anywhere — validation compiles happen outside ingestion/ too)
 __pycache__/
 
+# Ingestion worker state (created on-box by the periodic worker)
+ingestion/.ingest-manifest.json
+
 # OS junk
 .DS_Store
 Thumbs.db
