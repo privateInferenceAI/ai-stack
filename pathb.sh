@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
-# pathb.sh — Path B orchestrator: fresh install, no backup, fresh secrets.
+# pathb.sh — fresh install orchestrator: no backup, fresh secrets.
 # Runs AFTER phase1a + reboot + phase1b, on a box with the kit untarred at /opt/ai-stack.
-# Field-corrected against build_3..8 (the real §3-§8 guides).
 set -euo pipefail
 STACK=/opt/ai-stack
 log(){ echo "== $*"; }
 
-# --- gate (restore.sh [0/8] checks) ---
+# --- gate ---
 command -v docker >/dev/null || { echo "ERROR: docker missing — run phase1b"; exit 1; }
 nvidia-smi >/dev/null 2>&1  || { echo "ERROR: GPU not ready — phase1a/reboot"; exit 1; }
 docker network inspect ai-net >/dev/null 2>&1 || docker network create ai-net
@@ -60,7 +59,7 @@ log "minting WebUI + n8n virtual keys"
 WK=$(mint); NK=$(mint)
 [[ "$WK" == sk-* && "$NK" == sk-* ]] || { echo "ERROR: key minting failed (jq returned empty — is LiteLLM really up?)"; exit 1; }
 
-# --- inject minted keys, force-recreate so they take effect (Bug 33/34) ---
+# --- inject minted keys, force-recreate so they take effect ---
 sed -i "s|^WEBUI_VIRTUAL_KEY=.*|WEBUI_VIRTUAL_KEY=$WK|" "$STACK/.env"
 sed -i "s|^N8N_VIRTUAL_KEY=.*|N8N_VIRTUAL_KEY=$NK|" "$STACK/.env"
 log "keys injected; force-recreating webui + n8n"
@@ -74,20 +73,25 @@ log "seeding Qdrant (collection: company_docs; acl from folder name)"
 docker exec ingestion python3 /app/ingest.py
 
 # --- canary + VRAM note ---
+# NOTE: the model-ready wait above means VRAM should already read ~16,6xx here.
+# ~3,1xx = the wait timed out; the model is still loading (check: docker logs llamacpp).
 log "containers: $(docker ps -q | wc -l)/10"
 VRAM=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits)
-log "VRAM used: ${VRAM} MiB (field norm ~16,6xx; over ~21,000 = watch Bug 25)"
+log "VRAM used: ${VRAM} MiB (norm ~16,6xx; over ~21,000 = watch the GPU budget)"
 
 cat <<DONE
 
-  PATH B STACK IS UP — fresh secrets, minted keys, documents seeded into company_docs.
+  STACK IS UP — fresh secrets, minted keys, documents seeded into company_docs.
 
-  NOW THE 4 BROWSER STOPS (the part that needs a human):
+  NOW THE BROWSER WIRING (see the guide, Stage 3):
     1. WebUI  http://localhost:3000  → create admin (first account = admin)
-    2. WebUI  → Admin → Settings → General → turn OFF "Allow New Signups" → Save
-    3. WebUI  → Admin → Functions → import guardrails-function.py → enable + set GLOBAL (Bug 50) → Valves: paste Qdrant key
-    4. n8n    http://localhost:5678  → create owner → Import MyWorkflow.json → add OpenAI credential
-              (base http://litellm:4000/v1, key = N8N_VIRTUAL_KEY from .env)
+    2. WebUI  → Admin → Settings → Authentication → turn OFF "Allow New Signups" → Save
+    3. WebUI  → verify model dropdown shows company-ai (compose pre-wires the connection)
+    4. WebUI  → Admin → Functions → import guardrails-function.py → enable + set GLOBAL → Valves: paste Qdrant key
+    5. n8n    http://localhost:5678  → create owner
+    6. n8n    → OpenAI credential (base http://litellm:4000/v1, key = N8N_VIRTUAL_KEY from .env)
+    7. n8n    → SMTP credential (mailpit:1025, test/test, TLS off)
+    8. n8n    → Import MyWorkflow.json → confirm both credentials referenced
 
   Then verify: mileage=67c (any user) · CEO salary=\$425,000 (admin) · salary refused (regular user) ·
                injection refused · invoice workflow → Mailpit → Approve.

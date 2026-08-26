@@ -121,7 +121,7 @@ echo
 echo "[6/7] Restoring n8n data..."
 rm -rf "$STACK/n8n-data"
 tar xzf "$BACKUP/n8n-data.tar.gz" -C "$STACK"
-chown -R 1000:1000 "$STACK/n8n-data"   # n8n runs as UID 1000 (Bug 23 rule)
+chown -R 1000:1000 "$STACK/n8n-data"   # n8n runs as UID 1000
 echo "  n8n restored"
 
 # ---------- 7. restore documents + exports ----------

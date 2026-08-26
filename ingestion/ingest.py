@@ -8,15 +8,15 @@ Idempotent: re-running re-embeds and overwrites by document name (safe to re-run
 import os, sys, uuid, glob
 import requests
 
-# --- Config (from environment, set by the wrapper script) ---
+# --- Config (from environment) ---
 QDRANT_URL = os.environ.get("QDRANT_URL", "http://qdrant:6333")
 QDRANT_API_KEY = os.environ["QDRANT_API_KEY"]
 EMBED_URL = os.environ.get("EMBED_URL", "http://embeddings:80")
 COLLECTION = "company_docs"
 DOCS_ROOT = "/documents"
-CHUNK_SIZE = 512        # characters per chunk (simple char chunking; see notes)
+CHUNK_SIZE = 512        # characters per chunk (simple char chunking)
 CHUNK_OVERLAP = 64
-VECTOR_SIZE = 1024      # bge-m3 output dimension — must match Step 3 test
+VECTOR_SIZE = 1024      # bge-m3 output dimension
 
 HEADERS = {"api-key": QDRANT_API_KEY, "Content-Type": "application/json"}
 

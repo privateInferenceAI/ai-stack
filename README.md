@@ -92,7 +92,7 @@ In order:
 
 1. **WebUI admin** — `http://localhost:3000` → Sign up. **The first account becomes admin.**
 2. **Disable signups** — Admin Panel → Settings → Authentication → "Allow New Signups" OFF → Save.
-3. **Guardrails function** — Admin Panel → Functions → new → paste `exports/guardrails-function.py` → Save → enable **and set GLOBAL** → Valves: paste `QDRANT_API_KEY` from `/opt/ai-stack/.env`.
+3. **Guardrails function** — Admin Panel → Functions → new → paste `guardrails/guardrails-function.py` → Save → enable **and set GLOBAL** → Valves: paste `QDRANT_API_KEY` from `/opt/ai-stack/.env`.
 4. **n8n owner** — `http://localhost:5678` → create the owner account.
 5. **n8n credentials** — **OpenAI** (Base URL `http://litellm:4000/v1`, key = `N8N_VIRTUAL_KEY` from `.env`) and **SMTP** (host `mailpit`, port `1025`, user/pass `test`/`test`, TLS off).
 6. **Import the workflow** — n8n → Import from File → `exports/MyWorkflow.json`.
@@ -127,10 +127,10 @@ sudo docker exec ingestion python3 /app/ingest.py
 ├── backup.sh / restore.sh      # capture state / rebuild elsewhere
 ├── docker-compose.yml          # all 10 services, pinned
 ├── litellm/config.yaml         # gateway config: model alias, budgets, thinking-mode off
-├── guardrails/policy.txt       # guardrail rules in plain English
+├── guardrails/                 # policy.txt (plain-English rules) + guardrails-function.py (WebUI filter)
 ├── ingestion/                  # Dockerfile + ingest.py
 ├── documents/                  # seed documents: company/ (all users) + executive/ (admins)
-├── exports/                    # guardrails-function.py + MyWorkflow.json (imported in the UI)
+├── exports/                    # MyWorkflow.json (n8n demo workflow, imported in the UI)
 └── docs/                       # full guides
 ```
 
