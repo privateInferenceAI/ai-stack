@@ -128,9 +128,9 @@ Collection points count: 2
 
 **Notes:**
 
-- The script creates the runtime directories (gittar), writes 11 keys into `.env` (genenv — `keys=11 empty=0` is the pass condition), builds the ingestion image, starts the stack, mints and injects the two virtual keys, then seeds the two sample documents.
+- The script creates the runtime directories (gittar), writes 11 keys into `.env` (genenv — `keys=11 empty=0` is the pass condition), builds the ingestion image, starts the stack, **waits for LiteLLM and for the model to finish loading** (probe from inside `ai-net`), mints and injects the two virtual keys, then seeds the two sample documents.
 - **141 migrations** on LiteLLM's first boot is one-time. Several minutes of activity is normal — do not interrupt.
-- **The VRAM line can read ~3,1xx MiB even on a correct build.** The script checks the moment seeding ends — often before llamacpp has finished mapping the model onto the GPU. Wait a minute and confirm for yourself:
+- **The VRAM line should now read ~16,6xx MiB at the canary** — pathb waits for llamacpp to report model-ready before seeding, so mapping is done by then. If it still reads ~3,1xx, the model is still loading (the wait loop will have logged a WARNING). Confirm for yourself:
 
   ```bash
   nvidia-smi --query-gpu=memory.used,memory.total --format=csv
@@ -572,6 +572,23 @@ cd "$STACK" && docker compose up -d
 # --- wait for LiteLLM, then mint the two virtual keys ---
 log "waiting for LiteLLM to be alive"
 for i in $(seq 1 60); do curl -sf http://localhost:4000/health/liveliness >/dev/null 2>&1 && break; sleep 2; done
+
+# --- wait for the LLM backend: containers up ≠ model loaded (first boot maps ~9GB) ---
+# Probe from INSIDE ai-net via the litellm container (ships python3) — the exact path
+# production uses. Indifferent to whether host port 8080 is published (lock-down).
+log "waiting for llamacpp model-ready (probe from inside ai-net)"
+LLAMA_KEY=$$(grep '^LLAMA_API_KEY=' "$$STACK/.env" | cut -d= -f2-)
+READY=0
+for i in $(seq 1 90); do
+  if docker exec litellm python3 -c "import urllib.request; urllib.request.urlopen(urllib.request.Request('http://llamacpp:8080/health', headers={'Authorization': 'Bearer $$LLAMA_KEY'}), timeout=5)" >/dev/null 2>&1; then READY=1; break; fi
+  sleep 5
+done
+if [[ "$$READY" == 1 ]]; then
+  log "llamacpp model-ready"
+else
+  log "WARNING: model still loading after the wait — first chats may fail briefly; watch: docker logs llamacpp"
+fi
+
 MASTER=$$(grep '^LITELLM_MASTER_KEY=' "$$STACK/.env" | cut -d= -f2)
 
 mint(){ # mints a company-ai virtual key, prints the sk- value
