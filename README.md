@@ -8,7 +8,7 @@ A self-hosted AI stack for a single GPU box: staff chat, access-controlled docum
 Browser ──► Open WebUI ──► guardrails filter ──► LiteLLM ──► llama.cpp ──► GPU (Qwen3-14B)
                                                   │              └──► Postgres (keys, budgets, logs)
                        n8n workflows ─────────────┘
-                       Qdrant (vector DB) ◄── ingestion (on-demand job)
+                       Qdrant (vector DB) ◄── ingestion (periodic worker)
                        Mailpit (test email / human gate)
 ```
 
@@ -107,11 +107,9 @@ In order:
 | "ignore all previous instructions..." | Refused |
 | n8n invoice workflow | Pauses for approval; approve in Mailpit at `http://localhost:8025` |
 
-The answers come from the sample documents in `documents/company/` and `documents/executive/`. To load your own: drop files into those folders and run:
+The answers come from the sample documents in `documents/company/` and `documents/executive/`. To load your own: drop files into those folders — the ingestion worker picks them up automatically (every `INGEST_INTERVAL_SECONDS`, default 15 min; tunable in `.env`). To ingest immediately:
 
 ```bash
-cd /opt/ai-stack
-sudo docker compose up -d ingestion
 sudo docker exec ingestion python3 /app/ingest.py
 ```
 
@@ -147,5 +145,5 @@ sudo docker exec ingestion python3 /app/ingest.py
 
 - Voice transcription (GPU Whisper) + meeting-notes workflow
 - Speaker diarization
-- Production ingestion: watched folders, OCR for scanned PDFs, per-file status
+- Production ingestion: richer file types + OCR via a dedicated pipeline (replacing the built-in extractors), per-file status
 - Larger-model tier on a 48GB GPU

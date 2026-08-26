@@ -68,7 +68,7 @@ docker compose up -d --force-recreate open-webui n8n
 # --- wait for TEI, then seed Qdrant (single collection company_docs; folder name = acl tag) ---
 log "waiting for embeddings Ready"
 for i in $(seq 1 72); do docker logs embeddings 2>&1 | grep -q Ready && break; sleep 5; done
-docker compose up -d ingestion   # insurance: ingestion has no restart policy in some composes
+docker compose up -d ingestion   # insurance: make sure the ingestion worker is up
 log "seeding Qdrant (collection: company_docs; acl from folder name)"
 docker exec ingestion python3 /app/ingest.py
 
