@@ -9,10 +9,12 @@ echo "== gittar: creating runtime directories"
 sudo mkdir -p "$STACK/models" "$STACK/postgres-data" "$STACK/open-webui-data" \
              "$STACK/qdrant-data" "$STACK/n8n-data" "$STACK/backups"
 
-# n8n runs as UID 1000 (Bug 23 rule: chown n8n-data ONLY, never blanket-chown)
+# n8n runs as UID 1000 (chown n8n-data ONLY, never blanket-chown)
 sudo chown -R 1000:1000 "$STACK/n8n-data"
 
 # Everything else belongs to the deploying user
+# (safe HERE only because no container has written data yet — after first boot,
+#  a blanket chown of this tree will break Postgres file ownership)
 sudo chown -R "${SUDO_USER:-$USER}":"${SUDO_USER:-$USER}" "$STACK"
 
 # .env starts empty and locked; genenv.sh fills it

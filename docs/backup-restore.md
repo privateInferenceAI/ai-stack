@@ -30,7 +30,7 @@
 | `docker-compose.yml`, `.env` (as `config/env`) | Model GGUF (~9 GB — phase1b re-downloads it) |
 | `litellm/config.yaml`, `guardrails/`, `ingestion/` (script + Dockerfile) | WebUI's embedding cache (`open-webui-data/cache`) |
 | Postgres dump (keys, budgets, SpendLogs) | Whisper/speaches model cache |
-| Qdrant (all vectors), WebUI data (accounts/chats/SQLite), n8n data (workflows + encrypted credentials), source `documents/`, `exports/` (workflow JSON + function code) | |
+| Qdrant (all vectors), WebUI data (accounts/chats/SQLite), n8n data (workflows + encrypted credentials), source `documents/`, `exports/` (workflow JSON) | |
 
 The n8n credentials decrypt on the target because `N8N_ENCRYPTION_KEY` is in the restored `.env`. Both must come from the same backup.
 
@@ -399,7 +399,7 @@ A restore can only bring back wiring that existed at backup time. If the backup 
 
 1. **WebUI admin** at `localhost:3000` (**first account = admin**) → Admin → Settings → **Authentication** → "Allow New Signups" **OFF** → Save.
 2. **Model connection:** Admin → Settings → Connections → OpenAI: Base `http://litellm:4000/v1`, Key = raw `WEBUI_VIRTUAL_KEY` from `.env` (no `Bearer` prefix). Model dropdown should show `company-ai`.
-3. **Guardrails function:** Admin → Functions → new → paste `exports/guardrails-function.py` → Save → enable **and set GLOBAL** — enabled-but-not-global silently never fires → Valves: paste `QDRANT_API_KEY` from `.env`. Silent after Global → `docker compose restart open-webui`.
+3. **Guardrails function:** Admin → Functions → new → paste `guardrails/guardrails-function.py` → Save → enable **and set GLOBAL** — enabled-but-not-global silently never fires → Valves: paste `QDRANT_API_KEY` from `.env`. Silent after Global → `docker compose restart open-webui`.
 4. **n8n owner** at `localhost:5678` → Credentials → OpenAI (Base `http://litellm:4000/v1`, key = raw `N8N_VIRTUAL_KEY`) → SMTP (host `mailpit`, port `1025`, user/pass `test`/`test`, TLS off) → Import `exports/MyWorkflow.json` → confirm the nodes reference both credentials.
 
 ---

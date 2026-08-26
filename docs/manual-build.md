@@ -416,11 +416,10 @@ EOF
 ▶ TERMINAL:
 ```bash
 cat > /opt/ai-stack/guardrails/policy.txt << 'EOF'
-COMPANY AI — GUARDRAILS POLICY (v1)
+COMPANY AI — GUARDRAILS POLICY (v1.1)
 
 DENIED TOPICS (input is refused with a polite redirect):
   - payroll_individual : questions about a specific person salary or pay
-  - legal_advice       : requests for legal opinions or contract interpretation
 
 PII REDACTION (output is scanned and redacted before display):
   - SSN pattern (###-##-####)
@@ -429,18 +428,28 @@ INJECTION DEFENSE (input is refused):
   - attempts to override instructions ("ignore previous instructions", "you are now", "system:")
 
 NOTE: these rules are enforced by CODE on every message, not by asking the AI nicely.
+
+CLIENT CUSTOMIZATION: this policy is a TEMPLATE. Denied topics, keywords, and PII
+patterns are expected to differ per client and must be tailored at deployment time —
+see docs/guardrails-customization.md. This file is the human-readable contract; the
+actual enforcement lives in guardrails-function.py (its valves). The two MUST stay
+in sync — whatever this file promises, the code must do.
+
+(v1.1: removed legal_advice from DENIED TOPICS — it is too phrasing-dependent for
+substring matching, and each client's legal boundaries differ. Add it per client
+where required; see the customization guide.)
 EOF
 ```
 
 This is the audit artifact — the plain-English rules you can show a client. The code that enforces it is next.
 
-## 3.5 — exports/guardrails-function.py
+## 3.5 — guardrails/guardrails-function.py
 
 The middleware: input guardrail + role-ACL'd RAG injection + rerank in `inlet`, PII redaction in `outlet`. Imported into WebUI during browser wiring (Part 9); the copy on disk is the export of record.
 
 ▶ TERMINAL (one paste):
 ```bash
-cat > /opt/ai-stack/exports/guardrails-function.py << 'EOF'
+cat > /opt/ai-stack/guardrails/guardrails-function.py << 'EOF'
 """
 title: Company Guardrails + RAG
 author: ai-stack
@@ -492,6 +501,9 @@ class Filter:
             default=os.environ.get("QDRANT_API_KEY", ""),
             description="Qdrant API key.",
         )
+        # CHANGED v0.2: was default=3, now default=10
+        # Rationale: 32k context has room; reranker works better with larger pool;
+        # production needs better recall than 3 chunks provides.
         rag_top_k: int = Field(default=10, description="Number of chunks to retrieve and inject.")
         executive_roles: str = Field(
             default="admin",
@@ -529,6 +541,9 @@ class Filter:
         resp.raise_for_status()
         return resp.json()[0]
 
+    # CHANGED v0.2: _search now takes a LIST of acls and uses Qdrant "should" filter.
+    # Previously: took single acl, called once per acl, results merged and truncated.
+    # Now: one search, one limit, ACL controls visibility not volume.
     def _search(self, vector, acls):
         headers = {
             "api-key": self.valves.qdrant_api_key,
@@ -613,6 +628,9 @@ class Filter:
                 acls = ["company", "executive"] if role in exec_roles else ["company"]
                 vec = self._embed(user_text)
 
+                # CHANGED v0.2: single search with should-filter, no loop, no truncation.
+                # Previously: looped per-ACL, merged, truncated to rag_top_k.
+                # Now: one search returns up to rag_top_k total, mixed by relevance.
                 hits = self._search(vec, acls)
                 hits = self._rerank(user_text, hits)
 
@@ -664,7 +682,7 @@ EOF
 
 ▶ TERMINAL — sanity-check:
 ```bash
-python3 -c "compile(open('/opt/ai-stack/exports/guardrails-function.py').read(), 'guardrails-function.py', 'exec'); print('SYNTAX OK')"
+python3 -c "compile(open('/opt/ai-stack/guardrails/guardrails-function.py').read(), 'guardrails-function.py', 'exec'); print('SYNTAX OK')"
 ```
 
 ✔ EXPECTED: `SYNTAX OK`.
@@ -676,6 +694,7 @@ python3 -c "compile(open('/opt/ai-stack/exports/guardrails-function.py').read(),
 cat > /opt/ai-stack/docker-compose.yml << 'EOF'
 services:
   llamacpp:
+    # CHANGED: pinned to digest (was :server-cuda floating tag)
     image: ghcr.io/ggml-org/llama.cpp@sha256:48a88af72b29e865d64f464e3dc1e4fbbad4a36c5e2298d72d13b690f9d17dd2
     container_name: llamacpp
     restart: unless-stopped
@@ -710,8 +729,8 @@ services:
 
   postgres:
     image: postgres:16-alpine
-    # fallback digest if the version tag ever misbehaves:
-    # postgres@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
+    # STABLE-INFRA PIN SNAPSHOT (recorded 2026-08-07) — fallback digests if a version tag ever misbehaves.
+    # freeze: postgres@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
     container_name: litellm-postgres
     restart: unless-stopped
     environment:
@@ -730,6 +749,7 @@ services:
     # Deliberately NO ports: block. Internal to ai-net only.
 
   litellm:
+    # CHANGED: pinned to digest (was :main-stable)
     image: ghcr.io/berriai/litellm@sha256:af806882b7a6ced41658db5b6a7e98ed7b9b51d03b935e0417bf1c8552d688af
     container_name: litellm
     restart: unless-stopped
@@ -755,7 +775,10 @@ services:
     networks:
       - ai-net
 
+
+
   open-webui:
+    # CHANGED: pinned to digest (was :main) — this is v0.11.0
     image: ghcr.io/open-webui/open-webui@sha256:6a773e5c3a246b65cbe74ce942b294292c0e5f81c138f703d111bc162f7d7c3d
     container_name: open-webui
     restart: unless-stopped
@@ -781,8 +804,8 @@ services:
 
   qdrant:
     image: qdrant/qdrant:v1.11.3
-    # fallback digest if the version tag ever misbehaves:
-    # qdrant/qdrant@sha256:da426bb8aa0ba0a3032b3110e71d0d1516d51a686aa17b39bde4e090ce3b8e7c
+    # STABLE-INFRA PIN SNAPSHOT (recorded 2026-08-07) — fallback digests if a version tag ever misbehaves.
+    # freeze: qdrant/qdrant@sha256:da426bb8aa0ba0a3032b3110e71d0d1516d51a686aa17b39bde4e090ce3b8e7c
     container_name: qdrant
     restart: unless-stopped
     environment:
@@ -794,11 +817,11 @@ services:
 
   embeddings:
     image: ghcr.io/huggingface/text-embeddings-inference:1.6
-    # fallback digest (the same image serves embeddings AND reranker):
-    # ghcr.io/huggingface/text-embeddings-inference@sha256:25e35b0b266241a543c5ee305083eced4b6ac0772eb969c3fdaae2d4c2ef7266
+    # STABLE-INFRA PIN SNAPSHOT (recorded 2026-08-07) — fallback digests if a version tag ever misbehaves.
+    # freeze: ghcr.io/huggingface/text-embeddings-inference@sha256:25e35b0b266241a543c5ee305083eced4b6ac0772eb969c3fdaae2d4c2ef7266
     container_name: embeddings
     restart: unless-stopped
-    # Weights pre-downloaded in section 10 into /opt/ai-stack/models/tei (HF cache
+    # Weights pre-downloaded by phase1b.sh into /opt/ai-stack/models/tei (HF cache
     # layout), mounted at TEI's cache dir /data. HF_HUB_OFFLINE makes "no egress
     # at boot" enforced, not aspirational — TEI never touches the network.
     command: --model-id BAAI/bge-m3 --port 80
@@ -818,9 +841,11 @@ services:
 
   reranker:
     image: ghcr.io/huggingface/text-embeddings-inference:1.6
+    # STABLE-INFRA PIN SNAPSHOT (recorded 2026-08-07) — fallback digests if a version tag ever misbehaves.
+    # freeze: ghcr.io/huggingface/text-embeddings-inference@sha256:25e35b0b266241a543c5ee305083eced4b6ac0772eb969c3fdaae2d4c2ef7266
     container_name: reranker
     restart: unless-stopped
-    # Same preload story as the embeddings service above (digest comment there covers both).
+    # Same preload story as the embeddings service above.
     command: --model-id BAAI/bge-reranker-v2-m3 --port 80
     environment:
       - HF_HUB_OFFLINE=1
@@ -836,7 +861,10 @@ services:
     networks:
       - ai-net
 
+
   ingestion:
+    # CHANGED: build from local Dockerfile (was image: python:3.11-slim).
+    # Packages (pypdf, python-docx, requests) baked in — no more reinstall on recreate.
     build: ./ingestion
     container_name: ingestion
     environment:
@@ -851,7 +879,9 @@ services:
     networks:
       - ai-net
 
+
   n8n:
+    # CHANGED: pinned to digest (was :latest)
     image: docker.n8n.io/n8nio/n8n@sha256:a695e1db50fe1b5acf0c8563ceeea82b099f797cfa485def02647eae1e993953
     container_name: n8n
     restart: unless-stopped
@@ -871,6 +901,7 @@ services:
       - ai-net
 
   mailpit:
+    # CHANGED: pinned to digest (was :latest)
     image: axllent/mailpit@sha256:7f33095f80e901f6ad08028f06ca284aa58fe84942be5496008d041d3b9f4d4d
     container_name: mailpit
     restart: unless-stopped
@@ -1111,7 +1142,7 @@ In order, none optional:
 1. **🖱 WebUI admin** — `http://localhost:3000` → Sign up → **first account = admin** (real password).
 2. **🖱 Lock the door** — Admin Panel → Settings → **Authentication** → "Allow New Signups" **OFF** → Save. Immediately after step 1.
 3. **🖱 Verify the model connection** — the compose pre-wired it. New chat → dropdown shows **`company-ai`**. If not: Admin → Settings → Connections → OpenAI → Base `http://litellm:4000/v1`, Key = raw `WEBUI_VIRTUAL_KEY` from `.env` (**no "Bearer" prefix** — WebUI adds it) → Save.
-4. **🖱 Guardrails function** — Admin Panel → **Functions** → new → paste `/opt/ai-stack/exports/guardrails-function.py` → Save → **enable AND set GLOBAL** — an enabled-but-not-global function loads fine and silently never fires → **Valves:** `qdrant_api_key` = the value from `sudo grep '^QDRANT_API_KEY=' /opt/ai-stack/.env`. Silent after Global → `docker compose restart open-webui`.
+4. **🖱 Guardrails function** — Admin Panel → **Functions** → new → paste `/opt/ai-stack/guardrails/guardrails-function.py` → Save → **enable AND set GLOBAL** — an enabled-but-not-global function loads fine and silently never fires → **Valves:** `qdrant_api_key` = the value from `sudo grep '^QDRANT_API_KEY=' /opt/ai-stack/.env`. Silent after Global → `docker compose restart open-webui`.
 5. **🖱 n8n owner** — `http://localhost:5678` → **first account = owner** (real password).
 6. **🖱 n8n OpenAI credential** — Credentials → Add → OpenAI: Base `http://litellm:4000/v1`, Key = raw `N8N_VIRTUAL_KEY`. Tests green. Use the n8n key, never the master key.
 7. **🖱 n8n SMTP credential** — Credentials → Add → SMTP: Host `mailpit`, Port `1025`, User `test`, Password `test`, TLS **off**.

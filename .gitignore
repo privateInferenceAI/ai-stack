@@ -11,8 +11,8 @@ n8n-data/
 models/
 backups/
 
-# Ingestion image build context
-ingestion/__pycache__/
+# Python bytecode (anywhere — validation compiles happen outside ingestion/ too)
+__pycache__/
 
 # OS junk
 .DS_Store

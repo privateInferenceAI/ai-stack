@@ -111,6 +111,8 @@ genenv: wrote /opt/ai-stack/.env (mode 600). keys=11 empty=0
 == bringing stack up (LiteLLM will run 141 migrations — give it a minute)
 [+] up 113/113   ... all 10 containers Started/Healthy
 == waiting for LiteLLM to be alive
+== waiting for llamacpp model-ready (probe from inside ai-net)
+== llamacpp model-ready
 == minting WebUI + n8n virtual keys
 == keys injected; force-recreating webui + n8n
 == waiting for embeddings Ready
@@ -123,7 +125,7 @@ Ingesting [executive] exec-comp.txt ...
 Done. Total chunks upserted: 2
 Collection points count: 2
 == containers: 10/10
-== VRAM used: 3141 MiB (field norm ~16,6xx; over ~21,000 = watch Bug 25)
+== VRAM used: 16629 MiB (norm ~16,6xx; over ~21,000 = watch the GPU budget)
 ```
 
 **Notes:**
@@ -160,7 +162,7 @@ Do these in order. None are optional.
 
 **STEP 3 — Verify the model connection.** The compose pre-wires it. New chat → model dropdown should show **`company-ai`**. If it doesn't: Admin Panel → Settings → Connections → OpenAI → Base URL `http://litellm:4000/v1`, API Key = the **raw** `WEBUI_VIRTUAL_KEY` value from `.env` (`sudo grep '^WEBUI_VIRTUAL_KEY=' /opt/ai-stack/.env`) — **no "Bearer" prefix**; WebUI adds that itself → Save.
 
-**STEP 4 — Import the guardrails function.** Admin Panel → **Functions** → new function → paste the contents of `exports/guardrails-function.py` → Save → **enable it AND set it GLOBAL** — an enabled-but-not-global function loads fine and silently never fires → **Valves:** paste the Qdrant key into `qdrant_api_key` (`sudo grep '^QDRANT_API_KEY=' /opt/ai-stack/.env`). If it's silent even after Global: `docker compose restart open-webui`.
+**STEP 4 — Import the guardrails function.** Admin Panel → **Functions** → new function → paste the contents of `guardrails/guardrails-function.py` → Save → **enable it AND set it GLOBAL** — an enabled-but-not-global function loads fine and silently never fires → **Valves:** paste the Qdrant key into `qdrant_api_key` (`sudo grep '^QDRANT_API_KEY=' /opt/ai-stack/.env`). If it's silent even after Global: `docker compose restart open-webui`.
 
 **STEP 5 — n8n owner account.** `http://localhost:5678` → create owner (**first account = owner**, real password).
 
@@ -260,15 +262,15 @@ set -euo pipefail
 KNOWN_GOOD_DRIVER="nvidia-driver-595"   # the driver series the stack is tested on
 STACK=/opt/ai-stack
 LOG="$STACK/install-log.txt"
-OWNER="$${SUDO_USER:-$$USER}"             # correct whether run as ./phase1a.sh or sudo ./phase1a.sh
+OWNER="${SUDO_USER:-$USER}"             # correct whether run as ./phase1a.sh or sudo ./phase1a.sh
 
 sudo mkdir -p "$STACK"
 sudo touch "$LOG"
-sudo chown -R "$$OWNER:$$OWNER" "$STACK"
+sudo chown -R "$OWNER:$OWNER" "$STACK"
 
 log() {
-  echo "\$1"
-  echo "$$(date -u +%Y-%m-%dT%H:%M:%SZ)  \$1" | sudo tee -a "$$LOG" >/dev/null
+  echo "$1"
+  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ)  $1" | sudo tee -a "$LOG" >/dev/null
 }
 
 log "=== Phase 1a start (foundation, pre-reboot) ==="
@@ -291,13 +293,13 @@ if [[ -z "$RECOMMENDED" ]]; then
   ubuntu-drivers devices || true
   echo
   read -r -p "No recommended driver detected. Install known-good ${KNOWN_GOOD_DRIVER}? [y/n]: " KG
-  if [[ "$$KG" =~ ^[Yy]$$ ]]; then
+  if [[ "$KG" =~ ^[Yy]$ ]]; then
     CHOSEN_DRIVER="$KNOWN_GOOD_DRIVER"
   else
     echo "Aborting driver install. Install a driver manually, then re-run phase1a."
     exit 1
   fi
-elif [[ "$$RECOMMENDED" == "$$KNOWN_GOOD_DRIVER" ]]; then
+elif [[ "$RECOMMENDED" == "$KNOWN_GOOD_DRIVER" ]]; then
   log "Recommended driver (${RECOMMENDED}) matches known-good. Using it."
   CHOSEN_DRIVER="$RECOMMENDED"
 else
@@ -307,7 +309,7 @@ else
   echo "   Known-good build: ${KNOWN_GOOD_DRIVER}"
   echo "=================================================="
   read -r -p "Install [R]ecommended or [K]nown-good? [R/k]: " PICK
-  if [[ "$$PICK" =~ ^[Kk]$$ ]]; then
+  if [[ "$PICK" =~ ^[Kk]$ ]]; then
     CHOSEN_DRIVER="$KNOWN_GOOD_DRIVER"
   else
     CHOSEN_DRIVER="$RECOMMENDED"
@@ -316,7 +318,7 @@ fi
 
 log "Driver selected for install: ${CHOSEN_DRIVER}"
 
-if [[ "$$CHOSEN_DRIVER" == "$$KNOWN_GOOD_DRIVER" && "$$RECOMMENDED" != "$$KNOWN_GOOD_DRIVER" ]]; then
+if [[ "$CHOSEN_DRIVER" == "$KNOWN_GOOD_DRIVER" && "$RECOMMENDED" != "$KNOWN_GOOD_DRIVER" ]]; then
   log "Installing pinned known-good driver: ${CHOSEN_DRIVER}"
   sudo apt install -y "$CHOSEN_DRIVER"
 else
@@ -324,7 +326,7 @@ else
   sudo ubuntu-drivers autoinstall
 fi
 
-INSTALLED_NOTE=$$(apt-cache policy "$$CHOSEN_DRIVER" 2>/dev/null | grep -i 'installed' || echo "see autoinstall")
+INSTALLED_NOTE=$(apt-cache policy "$CHOSEN_DRIVER" 2>/dev/null | grep -i 'installed' || echo "see autoinstall")
 log "Driver install step complete. ${INSTALLED_NOTE}"
 
 log "=== Phase 1a complete ==="
@@ -345,17 +347,18 @@ echo "=================================================="
 # Phase 1b — fresh-server foundation, PART 2 (post-reboot).
 # Docker, NVIDIA Container Toolkit, firewall, fail2ban, dir tree, ai-net, model download, verification.
 # Run this AFTER the reboot that follows phase1a.sh.
+# Safe to invoke as ./phase1b.sh or sudo ./phase1b.sh — user-level steps target the real user either way.
 #
 set -euo pipefail
 
 STACK=/opt/ai-stack
 LOG="$STACK/install-log.txt"
-OWNER="$${SUDO_USER:-$$USER}"                          # the real user, even under sudo
-OWNER_HOME=$$(getent passwd "$$OWNER" | cut -d: -f6)   # owner's home, not root's
+OWNER="${SUDO_USER:-$USER}"                          # the real user, even under sudo
+OWNER_HOME=$(getent passwd "$OWNER" | cut -d: -f6)   # owner's home, not root's
 
 log() {
-  echo "\$1"
-  echo "$$(date -u +%Y-%m-%dT%H:%M:%SZ)  \$1" | sudo tee -a "$$LOG" >/dev/null
+  echo "$1"
+  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ)  $1" | sudo tee -a "$LOG" >/dev/null
 }
 
 log "=== Phase 1b start (post-reboot) ==="
@@ -367,7 +370,7 @@ if ! nvidia-smi >/dev/null 2>&1; then
 fi
 DRIVER_VER=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null || echo "unknown")
 GPU_NAME=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null || echo "unknown")
-log "GPU detected: $${GPU_NAME} | driver $${DRIVER_VER}"
+log "GPU detected: ${GPU_NAME} | driver ${DRIVER_VER}"
 
 # --- 1. Docker (official repo, literal codename) ---
 log "Installing Docker from the official repo..."
@@ -406,7 +409,7 @@ log "Creating stack tree + ai-net network..."
 sudo mkdir -p "$STACK/models"
 sudo touch "$STACK/.env"
 sudo chmod 600 "$STACK/.env"
-sudo chown -R "$$OWNER:$$OWNER" "$STACK"
+sudo chown -R "$OWNER:$OWNER" "$STACK"
 
 if sudo docker network inspect ai-net >/dev/null 2>&1; then
   log "ai-net already exists."
@@ -418,19 +421,19 @@ fi
 # --- 5. Model downloads (models are NOT in backups — re-download on fresh boxes) ---
 # hf CLI: user-level pip install; all downloads run as the real user, not root.
 sudo apt install -y python3-pip
-sudo -u "$$OWNER" env HOME="$$OWNER_HOME" python3 -m pip install --user --break-system-packages huggingface_hub
+sudo -u "$OWNER" env HOME="$OWNER_HOME" python3 -m pip install --user --break-system-packages huggingface_hub
 HF_BIN="$OWNER_HOME/.local/bin/hf"
-if [[ ! -x "$$HF_BIN" && -x "$$OWNER_HOME/.local/bin/huggingface-cli" ]]; then
+if [[ ! -x "$HF_BIN" && -x "$OWNER_HOME/.local/bin/huggingface-cli" ]]; then
   HF_BIN="$OWNER_HOME/.local/bin/huggingface-cli"
 fi
 
 # 5a. LLM GGUF
 MODEL="$STACK/models/Qwen3-14B-Q4_K_M.gguf"
-if [[ -f "$$MODEL" ]] && head -c 4 "$$MODEL" 2>/dev/null | grep -q GGUF; then
+if [[ -f "$MODEL" ]] && head -c 4 "$MODEL" 2>/dev/null | grep -q GGUF; then
   log "Model already present and valid, skipping download."
 else
   log "Downloading Qwen3-14B Q4_K_M (~9GB, this is the long pole)..."
-  sudo -u "$$OWNER" env HOME="$$OWNER_HOME" "$$HF_BIN" download Qwen/Qwen3-14B-GGUF Qwen3-14B-Q4_K_M.gguf --local-dir "$$STACK/models"
+  sudo -u "$OWNER" env HOME="$OWNER_HOME" "$HF_BIN" download Qwen/Qwen3-14B-GGUF Qwen3-14B-Q4_K_M.gguf --local-dir "$STACK/models"
 fi
 if head -c 4 "$MODEL" 2>/dev/null | grep -q GGUF; then
   log "Model verified (GGUF header present)."
@@ -439,17 +442,17 @@ else
 fi
 
 # 5b. TEI models (embeddings + reranker) — pre-downloaded into an HF cache at
-# $$STACK/models/tei, mounted at /data in the TEI containers (which also run with
+# $STACK/models/tei, mounted at /data in the TEI containers (which also run with
 # HF_HUB_OFFLINE=1). Without this, TEI downloads from HuggingFace at first boot —
 # which may be an offline client LAN — and re-downloads on every container recreate.
 for REPO in BAAI/bge-m3 BAAI/bge-reranker-v2-m3; do
-  NAME="$${REPO##*/}"
-  SNAP="$$STACK/models/tei/models--$${REPO/\//--}/snapshots"
-  if compgen -G "$$SNAP/*/model.safetensors" >/dev/null || compgen -G "$$SNAP/*/pytorch_model.bin" >/dev/null; then
-    log "TEI model $$NAME already cached, skipping."
+  NAME="${REPO##*/}"
+  SNAP="$STACK/models/tei/models--${REPO/\//--}/snapshots"
+  if compgen -G "$SNAP/*/model.safetensors" >/dev/null || compgen -G "$SNAP/*/pytorch_model.bin" >/dev/null; then
+    log "TEI model $NAME already cached, skipping."
   else
-    log "Downloading TEI model $$REPO..."
-    sudo -u "$$OWNER" env HOME="$$OWNER_HOME" HF_HUB_CACHE="$$STACK/models/tei" "$$HF_BIN" download "$$REPO"
+    log "Downloading TEI model $REPO..."
+    sudo -u "$OWNER" env HOME="$OWNER_HOME" HF_HUB_CACHE="$STACK/models/tei" "$HF_BIN" download "$REPO"
   fi
 done
 
@@ -490,8 +493,8 @@ set -euo pipefail
 STACK=/opt/ai-stack
 
 echo "== gittar: creating runtime directories"
-sudo mkdir -p "$$STACK/models" "$$STACK/postgres-data" "$STACK/open-webui-data" \
-             "$$STACK/qdrant-data" "$$STACK/n8n-data" "$STACK/backups"
+sudo mkdir -p "$STACK/models" "$STACK/postgres-data" "$STACK/open-webui-data" \
+             "$STACK/qdrant-data" "$STACK/n8n-data" "$STACK/backups"
 
 # n8n runs as UID 1000 (chown n8n-data ONLY, never blanket-chown)
 sudo chown -R 1000:1000 "$STACK/n8n-data"
@@ -499,12 +502,12 @@ sudo chown -R 1000:1000 "$STACK/n8n-data"
 # Everything else belongs to the deploying user
 # (safe HERE only because no container has written data yet — after first boot,
 #  a blanket chown of this tree will break Postgres file ownership)
-sudo chown -R "$${SUDO_USER:-$$USER}":"$${SUDO_USER:-$$USER}" "$STACK"
+sudo chown -R "${SUDO_USER:-$USER}":"${SUDO_USER:-$USER}" "$STACK"
 
 # .env starts empty and locked; genenv.sh fills it
 sudo touch "$STACK/.env"
 sudo chmod 600 "$STACK/.env"
-sudo chown "$${SUDO_USER:-$$USER}":"$${SUDO_USER:-$$USER}" "$STACK/.env"
+sudo chown "${SUDO_USER:-$USER}":"${SUDO_USER:-$USER}" "$STACK/.env"
 
 echo "== gittar: done. Next: sudo bash $STACK/genenv.sh (or pathb.sh)"
 ```
@@ -521,7 +524,7 @@ STACK=/opt/ai-stack
 
 gen() { openssl rand -hex 24; }   # 48 hex chars, URL-safe
 
-LLAMA=$$(gen); PGPASS=$$(gen); WEBUISEC=$$(gen); QDRANT=$$(gen); N8NENC=$(gen)
+LLAMA=$(gen); PGPASS=$(gen); WEBUISEC=$(gen); QDRANT=$(gen); N8NENC=$(gen)
 
 sudo tee "$STACK/.env" >/dev/null <<EOF
 LLAMA_API_KEY=$LLAMA
@@ -545,14 +548,14 @@ N8N_VIRTUAL_KEY=PENDING_MINT
 N8N_ENCRYPTION_KEY=$N8NENC
 EOF
 sudo chmod 600 "$STACK/.env"
-sudo chown "$${SUDO_USER:-$$USER}:$${SUDO_USER:-$$USER}" "$STACK/.env"
+sudo chown "${SUDO_USER:-$USER}:${SUDO_USER:-$USER}" "$STACK/.env"
 
 # verify: 11 keys, none empty
 # (the count pattern must include 0-9 or the digit-bearing N8N_* keys don't count)
-MISSING=$$(sudo grep -cE '=$$' "$STACK/.env" || true)
-COUNT=$$(sudo grep -cE '^[A-Z0-9_]+=' "$$STACK/.env" || true)
-echo "genenv: wrote $$STACK/.env (mode 600). keys=$$COUNT empty=$MISSING"
-[[ "$$COUNT" -ge 11 && "$$MISSING" -eq 0 ]] || { echo "ERROR: env incomplete"; exit 1; }
+MISSING=$(sudo grep -cE '=$' "$STACK/.env" || true)
+COUNT=$(sudo grep -cE '^[A-Z0-9_]+=' "$STACK/.env" || true)
+echo "genenv: wrote $STACK/.env (mode 600). keys=$COUNT empty=$MISSING"
+[[ "$COUNT" -ge 11 && "$MISSING" -eq 0 ]] || { echo "ERROR: env incomplete"; exit 1; }
 ```
 
 ### pathb.sh — fresh-install orchestrator
@@ -569,9 +572,9 @@ log(){ echo "== $*"; }
 command -v docker >/dev/null || { echo "ERROR: docker missing — run phase1b"; exit 1; }
 nvidia-smi >/dev/null 2>&1  || { echo "ERROR: GPU not ready — phase1a/reboot"; exit 1; }
 docker network inspect ai-net >/dev/null 2>&1 || docker network create ai-net
-GGUF=$$(ls "$$STACK"/models/*.gguf 2>/dev/null | head -1)
-[[ -n "$$GGUF" && "$$(head -c4 "$GGUF")" == "GGUF" ]] || { echo "ERROR: model GGUF missing/invalid — phase1b"; exit 1; }
-[[ -f "$$STACK/docker-compose.yml" ]] || { echo "ERROR: kit not untarred to $$STACK"; exit 1; }
+GGUF=$(ls "$STACK"/models/*.gguf 2>/dev/null | head -1)
+[[ -n "$GGUF" && "$(head -c4 "$GGUF")" == "GGUF" ]] || { echo "ERROR: model GGUF missing/invalid — phase1b"; exit 1; }
+[[ -f "$STACK/docker-compose.yml" ]] || { echo "ERROR: kit not untarred to $STACK"; exit 1; }
 log "gate passed: docker/GPU/ai-net/model/kit all present"
 
 # --- prepare runtime dirs Git can't track (empty dirs, permissions) ---
@@ -596,19 +599,19 @@ for i in $(seq 1 60); do curl -sf http://localhost:4000/health/liveliness >/dev/
 # Probe from INSIDE ai-net via the litellm container (ships python3) — the exact path
 # production uses. Indifferent to whether host port 8080 is published (lock-down).
 log "waiting for llamacpp model-ready (probe from inside ai-net)"
-LLAMA_KEY=$$(grep '^LLAMA_API_KEY=' "$$STACK/.env" | cut -d= -f2-)
+LLAMA_KEY=$(grep '^LLAMA_API_KEY=' "$STACK/.env" | cut -d= -f2-)
 READY=0
 for i in $(seq 1 90); do
-  if docker exec litellm python3 -c "import urllib.request; urllib.request.urlopen(urllib.request.Request('http://llamacpp:8080/health', headers={'Authorization': 'Bearer $$LLAMA_KEY'}), timeout=5)" >/dev/null 2>&1; then READY=1; break; fi
+  if docker exec litellm python3 -c "import urllib.request; urllib.request.urlopen(urllib.request.Request('http://llamacpp:8080/health', headers={'Authorization': 'Bearer $LLAMA_KEY'}), timeout=5)" >/dev/null 2>&1; then READY=1; break; fi
   sleep 5
 done
-if [[ "$$READY" == 1 ]]; then
+if [[ "$READY" == 1 ]]; then
   log "llamacpp model-ready"
 else
   log "WARNING: model still loading after the wait — first chats may fail briefly; watch: docker logs llamacpp"
 fi
 
-MASTER=$$(grep '^LITELLM_MASTER_KEY=' "$$STACK/.env" | cut -d= -f2)
+MASTER=$(grep '^LITELLM_MASTER_KEY=' "$STACK/.env" | cut -d= -f2)
 
 mint(){ # mints a company-ai virtual key, prints the sk- value
   curl -sf -X POST http://localhost:4000/key/generate \
@@ -616,12 +619,12 @@ mint(){ # mints a company-ai virtual key, prints the sk- value
     -d '{"models":["company-ai"]}' | jq -r .key
 }
 log "minting WebUI + n8n virtual keys"
-WK=$$(mint); NK=$$(mint)
-[[ "$$WK" == sk-* && "$$NK" == sk-* ]] || { echo "ERROR: key minting failed (jq returned empty — is LiteLLM really up?)"; exit 1; }
+WK=$(mint); NK=$(mint)
+[[ "$WK" == sk-* && "$NK" == sk-* ]] || { echo "ERROR: key minting failed (jq returned empty — is LiteLLM really up?)"; exit 1; }
 
 # --- inject minted keys, force-recreate so they take effect ---
-sed -i "s|^WEBUI_VIRTUAL_KEY=.*|WEBUI_VIRTUAL_KEY=$$WK|" "$$STACK/.env"
-sed -i "s|^N8N_VIRTUAL_KEY=.*|N8N_VIRTUAL_KEY=$$NK|" "$$STACK/.env"
+sed -i "s|^WEBUI_VIRTUAL_KEY=.*|WEBUI_VIRTUAL_KEY=$WK|" "$STACK/.env"
+sed -i "s|^N8N_VIRTUAL_KEY=.*|N8N_VIRTUAL_KEY=$NK|" "$STACK/.env"
 log "keys injected; force-recreating webui + n8n"
 docker compose up -d --force-recreate open-webui n8n
 
@@ -633,9 +636,8 @@ log "seeding Qdrant (collection: company_docs; acl from folder name)"
 docker exec ingestion python3 /app/ingest.py
 
 # --- canary + VRAM note ---
-# NOTE: this reads VRAM the moment seeding ends — often BEFORE llamacpp has
-# finished mapping the model. ~3,1xx MiB here = model still loading, NOT a fault.
-# Re-check a minute later; the norm is ~16,629 MiB.
+# NOTE: the model-ready wait above means VRAM should already read ~16,6xx here.
+# ~3,1xx = the wait timed out; the model is still loading (check: docker logs llamacpp).
 log "containers: $(docker ps -q | wc -l)/10"
 VRAM=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits)
 log "VRAM used: ${VRAM} MiB (norm ~16,6xx; over ~21,000 = watch the GPU budget)"

@@ -28,7 +28,7 @@ DRIVER_VER=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/
 GPU_NAME=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null || echo "unknown")
 log "GPU detected: ${GPU_NAME} | driver ${DRIVER_VER}"
 
-# --- 1. Docker (official repo, literal codename — Bug 1) ---
+# --- 1. Docker (official repo, literal codename) ---
 log "Installing Docker from the official repo..."
 sudo install -m 0755 -d /etc/apt/keyrings
 sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
@@ -117,7 +117,7 @@ log "=== Phase 1b verification ==="
 GPU_IN_CONTAINER=$(sudo docker run --rm --gpus all nvidia/cuda:13.2.0-base-ubuntu24.04 nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null || echo "FAILED")
 log "GPU visible inside a container: ${GPU_IN_CONTAINER}"
 if [[ "$GPU_IN_CONTAINER" == "FAILED" ]]; then
-  log "HINT: a FAILED here can mean the CUDA test image tag moved, not a broken toolkit. The restore's real containers are the true GPU test."
+  log "HINT: a FAILED here can mean the CUDA test image tag moved, not a broken toolkit. The stack's real containers are the true GPU test."
 fi
 log "Docker version: $(sudo docker --version 2>/dev/null || echo 'n/a')"
 log "Compose version: $(sudo docker compose version 2>/dev/null || echo 'n/a')"
@@ -132,7 +132,7 @@ echo " GPU in container: ${GPU_IN_CONTAINER}"
 echo " Driver: ${DRIVER_VER}"
 echo " Log written to: ${LOG}"
 echo ""
-echo " NEXT: run the restore:"
-echo "   sudo /opt/ai-stack/restore.sh /opt/ai-stack/backups/<backup-dir>"
+echo " NEXT (fresh install):  untar the kit, then sudo bash /opt/ai-stack/pathb.sh"
+echo " NEXT (restore):        sudo /opt/ai-stack/restore.sh /opt/ai-stack/backups/<backup-dir>"
 echo "=================================================="
 echo " NOTE: log out and back in (or run 'newgrp docker') so docker works without sudo."

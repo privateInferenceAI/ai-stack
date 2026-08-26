@@ -61,7 +61,7 @@ Healthchecks exist only on postgres (`pg_isready`) and litellm (`/health/livelin
   sees `company` only. RAG errors fail open.
 - `outlet`: regex PII redaction (SSN pattern → `[REDACTED]`).
 - `guardrails/policy.txt` is the human-readable policy mirror. **Policy and code must
-  stay in sync** — see Known issues #1.
+  stay in sync** — see `docs/guardrails-customization.md`.
 
 ### Ingestion
 
@@ -103,8 +103,8 @@ Scripted path (canonical; full detail in `docs/scripted-build.md`):
    (installs Docker, NVIDIA container toolkit, UFW/fail2ban, creates `ai-net`,
    downloads the ≈9 GB Qwen3-14B GGUF).
 3. `sudo bash ./pathb.sh` → gittar → genenv → build ingestion image →
-   `docker compose up -d` → mints LiteLLM virtual keys for WebUI/n8n → seeds Qdrant.
-   Success = `containers: 10/10`.
+   `docker compose up -d` → waits for llamacpp model-ready → mints LiteLLM virtual
+   keys for WebUI/n8n → seeds Qdrant. Success = `containers: 10/10`.
 4. Browser wiring (SSH-tunnel ports 3000/5678/8025): create WebUI admin account →
    disable signups (Settings → Authentication) → import + globally enable the
    guardrails function (set valve `QDRANT_API_KEY`) → n8n owner account → n8n OpenAI
@@ -130,26 +130,29 @@ documents, exports — **not** the 9 GB model. **Restore:** `sudo ./restore.sh <
 - **Non-GPU validation:** on machines without a GPU, limit checks to reading code,
   `shellcheck`, `docker compose config`, and linting. Never `docker compose up`.
 - **Doc/script embedding:** `docs/manual-build.md` and `docs/scripted-build.md` embed
-  copies of the scripts and compose file — update the embedded copies when editing the
-  real files (drift already exists; see below).
+  copies of the scripts and compose file. Embedded copies must be **byte-exact** —
+  after editing either side, run `python3 scripts/check-doc-sync.py` (exits 1 on
+  drift; `--write` regenerates embedded copies from the real files).
 
 ## Known issues / gotchas
 
-1. **Policy/code mismatch:** `policy.txt` denies legal-advice topics, but the guardrails
-   code has no legal-related keywords.
-2. **`restore.sh` is missing the postgres role-password sync** (`ALTER USER litellm …`)
-   that `backup-restore.md` claims it has — warm-box restores crash-loop LiteLLM on auth.
-3. **README layout error:** the guardrails function lives in `guardrails/`, not `exports/`.
-4. **Doc/script drift:** repo `phase1b.sh`/`pathb.sh` banners are older than the copies
-   embedded in `scripted-build.md` (wrong signups-toggle location, missing SMTP step).
-5. **llamacpp :8080 is published on the host** — bypasses LiteLLM and the guardrails;
-   docs note it should be removed at lock-down.
-6. **First-boot egress:** TEI containers download `bge-m3` / `bge-reranker-v2-m3` from
-   HuggingFace on first start — needs network access or pre-cached models at deploy time.
-7. **Startup race:** litellm depends on llamacpp with `service_started` only; the 9 GB
-   model takes a while to load, and llamacpp has no healthcheck.
-8. **No ingestion scheduler** and **no automated guardrails install** — both are manual.
-9. **Dangling `Bug N` comments** in scripts refer to an external field log not in the repo.
+1. **llamacpp :8080 is published on the host** as a build-time debug port — bypasses
+   LiteLLM and the guardrails. Documented in compose + both guides; removal or
+   localhost-bind at production lock-down is tracked in GitHub issue #2.
+2. **No ingestion scheduler** and **no automated guardrails install** — both are
+   manual (re-run `docker exec ingestion python3 /app/ingest.py` after adding
+   documents; install/tune the filter via WebUI → Functions — see
+   `docs/guardrails-customization.md`).
+3. **Healthchecks exist only on postgres and litellm.** pathb.sh gates installs on
+   llamacpp model-ready + TEI Ready, but a compose-level llamacpp healthcheck
+   (→ `depends_on: service_healthy`) is pending the curl/wget image check in issue #5.
+
+Recently resolved (kept for context): policy/code `legal_advice` mismatch (policy
+v1.1 + `docs/guardrails-customization.md`), restore.sh postgres password sync,
+README `exports/` layout, doc/script drift (byte-exact + guarded by
+`scripts/check-doc-sync.py`), TEI first-boot egress (pre-download +
+`HF_HUB_OFFLINE=1`), the llamacpp startup race (pathb model-ready wait), and the
+dangling `Bug N` comments.
 
 ## Canary answers (smoke-testing RAG + ACL)
 

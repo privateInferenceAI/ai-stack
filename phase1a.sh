@@ -6,7 +6,7 @@
 #
 set -euo pipefail
 
-KNOWN_GOOD_DRIVER="nvidia-driver-595"   # the driver series the original build was tested on
+KNOWN_GOOD_DRIVER="nvidia-driver-595"   # the driver series the stack is tested on
 STACK=/opt/ai-stack
 LOG="$STACK/install-log.txt"
 OWNER="${SUDO_USER:-$USER}"             # correct whether run as ./phase1a.sh or sudo ./phase1a.sh
