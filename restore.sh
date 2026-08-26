@@ -84,6 +84,18 @@ for i in $(seq 1 30); do
   fi
   sleep 2
 done
+
+# --- Sync the role password to the restored .env ---
+# Needed on a WARM target (this box previously ran a stack): the existing
+# postgres-data was initialized under the OLD .env password, and database dumps
+# don't carry role passwords — so the restored .env's DATABASE_URL wouldn't match
+# the live role. Harmless no-op on a fresh target (passwords match by construction).
+# Works because psql inside the container over the local socket is trust-authenticated.
+echo "  syncing postgres role password to restored .env..."
+PGPW=$(grep '^POSTGRES_PASSWORD=' "$STACK/.env" | cut -d= -f2-)
+docker exec litellm-postgres psql -h /var/run/postgresql -U litellm -d postgres \
+  -c "ALTER USER litellm WITH PASSWORD '$PGPW';"
+
 # Drop and recreate the litellm DB so the dump restores into a clean database.
 docker exec litellm-postgres psql -U litellm -d postgres -c "DROP DATABASE IF EXISTS litellm;"
 docker exec litellm-postgres psql -U litellm -d postgres -c "CREATE DATABASE litellm;"
