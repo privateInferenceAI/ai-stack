@@ -127,7 +127,14 @@ services:
     # freeze: ghcr.io/huggingface/text-embeddings-inference@sha256:25e35b0b266241a543c5ee305083eced4b6ac0772eb969c3fdaae2d4c2ef7266
     container_name: embeddings
     restart: unless-stopped
+    # Weights pre-downloaded by phase1b.sh into /opt/ai-stack/models/tei (HF cache
+    # layout), mounted at TEI's cache dir /data. HF_HUB_OFFLINE makes "no egress
+    # at boot" enforced, not aspirational — TEI never touches the network.
     command: --model-id BAAI/bge-m3 --port 80
+    environment:
+      - HF_HUB_OFFLINE=1
+    volumes:
+      - /opt/ai-stack/models/tei:/data:ro
     deploy:
       resources:
         reservations:
@@ -140,9 +147,16 @@ services:
 
   reranker:
     image: ghcr.io/huggingface/text-embeddings-inference:1.6
+    # STABLE-INFRA PIN SNAPSHOT (recorded 2026-08-07) — fallback digests if a version tag ever misbehaves.
+    # freeze: ghcr.io/huggingface/text-embeddings-inference@sha256:25e35b0b266241a543c5ee305083eced4b6ac0772eb969c3fdaae2d4c2ef7266
     container_name: reranker
     restart: unless-stopped
+    # Same preload story as the embeddings service above.
     command: --model-id BAAI/bge-reranker-v2-m3 --port 80
+    environment:
+      - HF_HUB_OFFLINE=1
+    volumes:
+      - /opt/ai-stack/models/tei:/data:ro
     deploy:
       resources:
         reservations:

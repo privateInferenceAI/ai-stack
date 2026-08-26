@@ -171,6 +171,16 @@ head -c 4 /opt/ai-stack/models/Qwen3-14B-Q4_K_M.gguf; echo
 ```
 → ~8–9 GB file; prints `GGUF`.
 
+**TEI models (embeddings + reranker) — same idea, smaller downloads.** Pre-download them now so the TEI containers never touch the network at boot (compose mounts this cache at `/data` and sets `HF_HUB_OFFLINE=1`):
+
+▶ TERMINAL (still as ubuntu, no sudo):
+```bash
+HF_HUB_CACHE=/opt/ai-stack/models/tei ~/.local/bin/hf download BAAI/bge-m3
+HF_HUB_CACHE=/opt/ai-stack/models/tei ~/.local/bin/hf download BAAI/bge-reranker-v2-m3
+```
+
+✔ EXPECTED: two HF cache trees under `/opt/ai-stack/models/tei` (`models--BAAI--bge-m3`, `models--BAAI--bge-reranker-v2-m3`). Without these, embeddings/reranker try to download from HuggingFace at first boot — and fail on an offline client LAN.
+
 ## 11. Final verification
 
 ▶ TERMINAL:
@@ -788,7 +798,14 @@ services:
     # ghcr.io/huggingface/text-embeddings-inference@sha256:25e35b0b266241a543c5ee305083eced4b6ac0772eb969c3fdaae2d4c2ef7266
     container_name: embeddings
     restart: unless-stopped
+    # Weights pre-downloaded in section 10 into /opt/ai-stack/models/tei (HF cache
+    # layout), mounted at TEI's cache dir /data. HF_HUB_OFFLINE makes "no egress
+    # at boot" enforced, not aspirational — TEI never touches the network.
     command: --model-id BAAI/bge-m3 --port 80
+    environment:
+      - HF_HUB_OFFLINE=1
+    volumes:
+      - /opt/ai-stack/models/tei:/data:ro
     deploy:
       resources:
         reservations:
@@ -803,7 +820,12 @@ services:
     image: ghcr.io/huggingface/text-embeddings-inference:1.6
     container_name: reranker
     restart: unless-stopped
+    # Same preload story as the embeddings service above (digest comment there covers both).
     command: --model-id BAAI/bge-reranker-v2-m3 --port 80
+    environment:
+      - HF_HUB_OFFLINE=1
+    volumes:
+      - /opt/ai-stack/models/tei:/data:ro
     deploy:
       resources:
         reservations:
@@ -1037,7 +1059,7 @@ cd /opt/ai-stack && sudo docker compose up -d --force-recreate open-webui n8n
 sudo docker logs embeddings 2>&1 | tail -3
 ```
 
-✔ EXPECTED: ends in `Ready`. First boot downloads ~2.3GB of weights with **no progress bar** — quiet is normal. The `WARN ... Invalid hostname, defaulting to 0.0.0.0` line just before `Ready` is cosmetic.
+✔ EXPECTED: ends in `Ready`. Weights are pre-downloaded (section 10) and the containers run `HF_HUB_OFFLINE=1`, so `Ready` should appear quickly with **no download lines**. The `WARN ... Invalid hostname, defaulting to 0.0.0.0` line just before `Ready` is cosmetic.
 
 ## 7.2 — Run the ingestion
 
@@ -1145,7 +1167,7 @@ n8n → Execute Workflow → pauses at the human hold → Mailpit `http://localh
 | Minting | `sk-` keys come from a LIVE LiteLLM (`/key/generate`), not openssl. Wait for `"I'm alive!"` first. |
 | Bearer | API key fields take the RAW `sk-`, not `Bearer sk-`. The app adds the header. |
 | ENABLE_SIGNUP true | Intentional until the admin exists. Then OFF in the UI; `pending` role is the backstop. |
-| TEI wait | `Ready` before ingesting; first boot downloads weights with no progress bar. |
+| TEI wait | `Ready` before ingesting; weights are pre-downloaded (§10) and `HF_HUB_OFFLINE=1` is set, so no download lines should appear. |
 | VRAM timing | ~3,1xx MiB right after launch = model still loading. Norm ~16,629 MiB. |
 
-**Startup noise that is NOT a fault:** `register_model ... not in cost map`; Prisma "wolfi" warning; Postgres `locale`/`trust auth` hints; 141 migrations first boot; TEI download with no progress bar; TEI `Invalid hostname, defaulting to 0.0.0.0`; llama.cpp `LLAMA_ARG_*`/`LLAMA_API_KEY` "overwritten by command line argument" warnings; llama.cpp future-port-9931 deprecation notice; fail2ban Python `SyntaxWarning` wall; HF unauthenticated + CLI upsell; `aplay command not found`; `udevadm hwdb is deprecated`; model logged as backend name `openai/qwen3-14b` (clients use the alias); `/opt/containerd` exists (Docker's runtime dir, not yours).
+**Startup noise that is NOT a fault:** `register_model ... not in cost map`; Prisma "wolfi" warning; Postgres `locale`/`trust auth` hints; 141 migrations first boot; TEI `Invalid hostname, defaulting to 0.0.0.0`; llama.cpp `LLAMA_ARG_*`/`LLAMA_API_KEY` "overwritten by command line argument" warnings; llama.cpp future-port-9931 deprecation notice; fail2ban Python `SyntaxWarning` wall; HF unauthenticated + CLI upsell; `aplay command not found`; `udevadm hwdb is deprecated`; model logged as backend name `openai/qwen3-14b` (clients use the alias); `/opt/containerd` exists (Docker's runtime dir, not yours).
