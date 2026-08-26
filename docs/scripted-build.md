@@ -140,6 +140,7 @@ Collection points count: 2
   ```
 
   ✔ Expected: `16629 MiB, 23028 MiB` (give or take a few MiB), and `llama_server: listening on http://0.0.0.0:8080` in the log.
+- **`== seeding Qdrant` may print the full first run (`Created collection …`) or `No document changes since last run; nothing to do.`** The ingestion worker fires at stack-up and races pathb's seed step — both outputs are healthy; the documents end up seeded either way.
 - The `LLAMA_ARG_HOST / LLAMA_API_KEY ... overwritten by command line argument` warnings and llama.cpp's future-port-9931 notice: cosmetic — the compose sets both env and CLI args; the CLI wins.
 
 **If the gate fails:** it names the missing piece (docker/GPU/model/compose). **If `containers:` reads < 10:** `docker ps -a`, then `docker logs <dead-one> --tail 20` — the last 3 lines say why.

@@ -115,7 +115,7 @@ Steps 6–7 print nothing — normal. Size scales with your data (~800M near-emp
 
 ```bash
 OUT=$(ls -td /opt/ai-stack/backups/ai-stack-backup-* | head -1)
-ls -lh "$$OUT" "$$OUT/config"
+ls -lh "$OUT" "$OUT/config"
 head -3 "$OUT/postgres-litellm.sql"
 tar tzf "$OUT/open-webui-data.tar.gz" | sort | uniq -d | head -5
 ```

@@ -16,12 +16,17 @@ Usage:
     python3 scripts/check-doc-sync.py           # check only; exit 1 on drift
     python3 scripts/check-doc-sync.py --write   # rewrite embedded copies from the real files
 
+Also lints prose (lines OUTSIDE the embedded blocks) for leftover `$$` escaping
+artifacts — the LLM heredoc artifact class. Legitimate `$$` inside embedded blocks
+is excluded by block tracking (they are verified byte-exact against the real files,
+where compose `$$` syntax is correct); the prose mention of `$${POSTGRES_USER}`
+(compose healthcheck syntax) is whitelisted explicitly.
+
 Run after editing either side (real file or embedded copy). The --write mode is
 the fastest way to re-sync: edit the REAL file, then regenerate the embedded copy.
 
-NOT caught (by design): prose and sample-output drift — expected outputs,
-settings-page names, troubleshooting tables. Those aren't files; review them
-by eye when editing.
+NOT caught (by design): semantic prose drift — expected outputs, settings-page
+names, troubleshooting tables. Those aren't files; review them by eye when editing.
 """
 
 from __future__ import annotations
@@ -109,9 +114,26 @@ def collect():
                 yield doc, lines, start, cs, ce, rel, lines[cs:ce]
 
 
+PROSE_ESCAPE_WHITELIST = re.compile(r"\$\$\{POSTGRES_USER\}")
+
+
+def prose_escapes(doc: Path, spans: list) -> list:
+    """`$$` occurrences outside embedded blocks (the LLM escaping artifact class)."""
+    hits = []
+    for lineno, line in enumerate(doc.read_text().splitlines(), 1):
+        if "$$" not in line or PROSE_ESCAPE_WHITELIST.search(line):
+            continue
+        if any(cs <= lineno - 1 < ce for cs, ce in spans):
+            continue
+        hits.append((lineno, line.strip()))
+    return hits
+
+
 def check() -> int:
     failures = checked = 0
-    for doc, _lines, start, _cs, _ce, rel, embedded in collect():
+    spans_by_doc: dict = {}
+    for doc, _lines, start, cs, ce, rel, embedded in collect():
+        spans_by_doc.setdefault(doc, []).append((cs, ce))
         real_file = REPO / rel
         if not real_file.is_file():
             print(f"MISSING  {doc.name}:{start}  ->  repo has no {rel}")
@@ -138,7 +160,11 @@ def check() -> int:
             print(f"         {line}")
         if len(diff) > 80:
             print(f"         ... ({len(diff) - 80} more diff lines)")
-    print(f"\n{checked} byte-exact, {failures} drifting/missing")
+    for doc, spans in spans_by_doc.items():
+        for lineno, text in prose_escapes(doc, spans):
+            failures += 1
+            print(f"PROSE-$$ {doc.name}:{lineno}: {text}")
+    print(f"\n{checked} byte-exact, {failures} drifting/missing/prose")
     return 1 if failures else 0
 
 
