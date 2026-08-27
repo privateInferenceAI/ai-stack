@@ -70,6 +70,8 @@ Healthchecks exist only on postgres (`pg_isready`) and litellm (`/health/livelin
   legacy .doc/.xls skipped) → 512-char chunks (64 overlap) → bge-m3 embeddings →
   Qdrant `company_docs`. Payload `acl` = top-level folder; uuid5 point IDs on
   relpath:chunk (same-named files in different subfolders don't collide).
+  Re-embeds are delta-only; corrupt files are dead-lettered after 2 failed cycles
+  (retried on content change); systemic outages abort without saving state.
 - Runs automatically every `INGEST_INTERVAL_SECONDS` (default 900s, `.env`-tunable)
   in the ingestion container; a sha256 manifest makes unchanged cycles free, and
   chunks of deleted/changed files are removed. Immediate run:

@@ -234,7 +234,7 @@ Everything the stack needs, written by hand. Terminal paste of multi-line conten
 ```bash
 cat > /opt/ai-stack/ingestion/Dockerfile << 'EOF'
 FROM python:3.11-slim
-RUN pip install --no-cache-dir pypdf python-docx openpyxl python-pptx beautifulsoup4 requests
+RUN pip install --no-cache-dir pypdf python-docx openpyxl python-pptx beautifulsoup4 cryptography requests
 WORKDIR /app
 CMD ["tail", "-f", "/dev/null"]
 EOF
@@ -260,11 +260,16 @@ Legacy binary .doc/.xls and anything else: skipped as unsupported. (OCR for
 scanned PDFs belongs to the dedicated-pipeline upgrade — see roadmap.)
 
 Scheduled-worker support:
-- sha256 manifest at /app/.ingest-manifest.json — unchanged document set = free no-op cycle.
+- sha256 state at /app/.ingest-manifest.json — unchanged document set = free no-op cycle.
+- Delta-only re-embeds: files unchanged since the last saved pass are skipped, so a
+  changed run costs O(new/changed files), not O(corpus).
 - Deletion reconciliation — files removed or changed since the last successful run
   lose all their Qdrant points before re-ingestion (no stale answers from deleted
   documents, no orphaned tail chunks from shortened files).
-- The manifest is saved ONLY on a clean pass (0 failures) so failed cycles retry.
+- Dead-lettering: a file that fails MAX_FILE_FAILURES consecutive cycles is recorded
+  as known-bad and skipped until its content changes — corrupt files don't burn GPU
+  every cycle. Systemic outages (embeddings/qdrant unreachable) abort the run and
+  save NOTHING, so the next cycle retries fresh (anti-poisoning).
 Idempotent: deterministic point IDs (uuid5 on relpath:chunk) make re-runs overwrite.
 NOTE: point IDs and payload 'source' use the relpath (company/hr/policy.txt) —
 same-named files in different subfolders do NOT collide.
@@ -289,7 +294,8 @@ HEADERS = {"api-key": QDRANT_API_KEY, "Content-Type": "application/json"}
 MANIFEST_PATH = "/app/.ingest-manifest.json"   # lives on the host mount; survives recreates
 
 # Outcome tracking for the end-of-run summary.
-STATS = {"ok": 0, "skipped": 0, "failed": 0, "chunks": 0, "stale": 0}
+STATS = {"ok": 0, "skipped": 0, "failed": 0, "chunks": 0, "stale": 0,
+         "unchanged": 0, "dead": 0, "newly_dead": 0}
 FAILURES = []  # (path, reason) for the failure summary
 
 
@@ -304,7 +310,7 @@ def extract_text(path):
     # --- PDF ---
     if ext == "pdf":
         from pypdf import PdfReader
-        reader = PdfReader(path)
+        reader = PdfReader(path, strict=False)   # tolerate malformed PDFs (many "Stream has ended" cases)
         return "\n".join(page.extract_text() or "" for page in reader.pages)
 
     # --- Modern Word ---
@@ -525,11 +531,19 @@ def scan_documents():
     return manifest
 
 def load_manifest():
+    """Load worker state. Schema: {"files": {rel: sha}, "fails": {rel: n}, "dead": {rel: sha}}.
+    Tolerates the old flat {rel: sha} manifest format."""
     try:
         with open(MANIFEST_PATH, "r", encoding="utf-8") as f:
-            return json.load(f)
+            data = json.load(f)
     except (OSError, ValueError):
-        return {}
+        return {"files": {}, "fails": {}, "dead": {}}
+    if isinstance(data, dict) and "files" in data:
+        return {"files": data.get("files", {}), "fails": data.get("fails", {}),
+                "dead": data.get("dead", {})}
+    if isinstance(data, dict):   # old flat {rel: sha} format
+        return {"files": data, "fails": {}, "dead": {}}
+    return {"files": {}, "fails": {}, "dead": {}}
 
 def save_manifest(manifest):
     with open(MANIFEST_PATH, "w", encoding="utf-8") as f:
@@ -542,10 +556,15 @@ def delete_by_source(source_rel):
                       headers=HEADERS, json=body, timeout=60)
     r.raise_for_status()
 
+MAX_FILE_FAILURES = 2   # consecutive failed cycles before a file is dead-lettered
+
 def main():
-    new_manifest = scan_documents()
-    old_manifest = load_manifest()
-    if old_manifest == new_manifest:
+    new_files = scan_documents()
+    state = load_manifest()
+    old_files = state["files"]
+    # No-op only when nothing changed AND nothing is pending a retry — a saved
+    # 'fails' entry must force a run even if the file tree is identical.
+    if old_files == new_files and not state["fails"]:
         print("No document changes since last run; nothing to do.")
         return
 
@@ -553,12 +572,16 @@ def main():
 
     # Deletion reconciliation: files removed from disk, or changed since the last
     # successful run, lose ALL their points before re-ingestion.
-    stale = [rel for rel in old_manifest
-             if rel not in new_manifest or old_manifest[rel] != new_manifest[rel]]
+    stale = [rel for rel in old_files
+             if rel not in new_files or old_files[rel] != new_files[rel]]
     for rel in stale:
         delete_by_source(rel)
         print(f"Removed stale chunks for: {rel}")
     STATS["stale"] = len(stale)
+
+    fails = dict(state["fails"])
+    dead = dict(state["dead"])
+    systemic = False
 
     for acl in ACL_FOLDERS:
         folder = os.path.join(DOCS_ROOT, acl)
@@ -566,25 +589,61 @@ def main():
             print(f"NOTE: folder not present, skipping: {folder}")
             continue
         for path in sorted(glob.glob(os.path.join(folder, "**", "*.*"), recursive=True)):
+            rel = os.path.relpath(path, DOCS_ROOT)
+            sha = new_files.get(rel)
+            # Known-bad: already dead-lettered at this exact content version.
+            if dead.get(rel) == sha:
+                STATS["dead"] += 1
+                continue
+            # Delta skip: unchanged since the last saved pass and not pending a retry —
+            # points are already correct. Re-embedding the whole corpus every cycle
+            # would take longer than the interval at real corpus sizes.
+            if rel not in stale and old_files.get(rel) == sha and rel not in fails:
+                STATS["unchanged"] += 1
+                continue
             try:
                 ingest_file(path, acl)
+                fails.pop(rel, None)
+                dead.pop(rel, None)   # a fixed/replaced file leaves the dead-letter list
+            except (requests.ConnectionError, requests.Timeout) as e:
+                # SYSTEMIC (embeddings/qdrant unreachable): abort the whole run and
+                # save NOTHING (anti-poisoning) — next cycle retries fresh.
+                print(f"SYSTEMIC ERROR on {rel}: {e} — aborting run; nothing saved.", file=sys.stderr)
+                systemic = True
+                break
             except Exception as e:
-                # A roadblock we WANT to see: record it, keep going.
-                print(f"  ERROR on {path}: {e}", file=sys.stderr)
+                # Per-file problem (corrupt/encrypted/unparseable): count it; after
+                # MAX_FILE_FAILURES consecutive cycles, dead-letter this content version.
+                fails[rel] = fails.get(rel, 0) + 1
                 STATS["failed"] += 1
-                FAILURES.append((path, str(e)[:200]))
+                if fails[rel] >= MAX_FILE_FAILURES:
+                    dead[rel] = sha
+                    fails.pop(rel, None)
+                    STATS["newly_dead"] += 1
+                    FAILURES.append((path, f"DEAD-LETTERED after {MAX_FILE_FAILURES} cycles: {str(e)[:160]}"))
+                    print(f"  GIVING UP on {rel} (permanent): {e}", file=sys.stderr)
+                else:
+                    FAILURES.append((path, str(e)[:200]))
+                    print(f"  ERROR on {path}: {e}", file=sys.stderr)
+        if systemic:
+            break
 
-    # Save the manifest ONLY on a clean pass. A manifest saved after failures
-    # (e.g. embeddings not up yet on first boot) poisons state: every later cycle
-    # no-ops while Qdrant stays empty/stale. Unsaved = retried next cycle.
-    if STATS["failed"]:
-        print(f"\n{STATS['failed']} file(s) failed — manifest NOT saved; retrying next cycle.", file=sys.stderr)
-    else:
-        save_manifest(new_manifest)
+    if systemic:
+        print("Run aborted on a systemic error (embeddings/qdrant down?) — full retry next cycle.", file=sys.stderr)
+        sys.exit(1)
+
+    # State IS saved even with per-file failures: the poisoning case (systemic
+    # outage) already returned above. Tracked failures and the dead-letter list must
+    # persist across cycles or they can never accumulate/heal.
+    fails = {k: v for k, v in fails.items() if k in new_files}   # prune bookkeeping
+    dead = {k: v for k, v in dead.items() if k in new_files}     # for deleted files
+    save_manifest({"files": new_files, "fails": fails, "dead": dead})
 
     print("\n===== INGEST SUMMARY =====")
     print(f"  Files ingested OK : {STATS['ok']}")
+    print(f"  Unchanged (delta-skipped): {STATS['unchanged']}")
     print(f"  Files skipped     : {STATS['skipped']} (unsupported type or no text)")
+    print(f"  Dead-lettered (known-bad): {STATS['dead']} (+{STATS['newly_dead']} this run)")
     print(f"  Files FAILED      : {STATS['failed']}")
     print(f"  Total chunks      : {STATS['chunks']}")
     print(f"  Stale sources removed: {STATS['stale']}")
@@ -592,6 +651,10 @@ def main():
         print("\n  Failure detail (first 40):")
         for p, reason in FAILURES[:40]:
             print(f"    {p} -> {reason}")
+    if dead:
+        print(f"\n  Dead-letter list ({len(dead)} files — retried only if the file changes):")
+        for rel in sorted(dead)[:20]:
+            print(f"    {rel}")
     # Show collection stats
     r = requests.get(f"{QDRANT_URL}/collections/{COLLECTION}", headers=HEADERS, timeout=30)
     info = r.json().get("result", {})
@@ -608,7 +671,7 @@ EOF
 python3 -c "compile(open('/opt/ai-stack/ingestion/ingest.py').read(), 'ingest.py', 'exec'); print('SYNTAX OK')"
 ```
 
-✔ EXPECTED: `SYNTAX OK`. (Full staged type set — pdf, docx, txt/md/markdown, rtf, html, csv, xlsx, pptx, odt — plus **recursion**: subfolders under `company/` and `executive/` are ingested too. Scheduled-worker support: manifest change-detection + deletion reconciliation. Legacy .doc/.xls skip as unsupported; OCR for scanned PDFs belongs to the dedicated-pipeline upgrade.)
+✔ EXPECTED: `SYNTAX OK`. (Full staged type set — pdf, docx, txt/md/markdown, rtf, html, csv, xlsx, pptx, odt — plus **recursion**: subfolders under `company/` and `executive/` are ingested too. Scheduled-worker support: manifest change-detection + deletion reconciliation; re-embeds are **delta-only** (unchanged files skip), and corrupt/unparseable files are **dead-lettered** after 2 failed cycles — listed in the summary, retried only if the file changes. Legacy .doc/.xls skip as unsupported; OCR for scanned PDFs belongs to the dedicated-pipeline upgrade.)
 
 ## 3.3 — litellm/config.yaml
 
