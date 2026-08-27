@@ -238,7 +238,7 @@ n8n → **Execute Workflow** → flows list → body-by-ID → extract → **pau
 | `containers:` < 10 | `docker ps -a` → `docker logs <dead> --tail 20`, last 3 lines first |
 | VRAM reads ~3,1xx at canary | The model is still loading. Wait a minute, re-check `nvidia-smi` (norm ~16,629 MiB) |
 | Model dropdown empty | Stage 3 Step 3: Connections → `http://litellm:4000/v1` + raw WEBUI_VIRTUAL_KEY |
-| RAG says "I don't know" for everyone | Function not Global, or Qdrant key not in Valves |
+| RAG says "I don't know" for everyone | Function not Global, or Qdrant key not in Valves — or empty Qdrant (poisoned manifest from a failed first cycle: `sudo rm /opt/ai-stack/ingestion/.ingest-manifest.json` + re-run the ingest exec) |
 | n8n OpenAI credential test fails | Base URL `http://litellm:4000/v1` (service name + `/v1`), N8N key not master |
 | Approval email never arrives | SMTP credential wrong (mailpit:1025, test/test, TLS off) or Mailpit restarted (in-memory — resend) |
 | Users logged out on WebUI restart | `WEBUI_SECRET_KEY` missing from `.env` — genenv sets it; verify it's there |

@@ -420,20 +420,29 @@ def main():
         print(f"Removed stale chunks for: {rel}")
 
     total = 0
+    failures = 0
     for acl in ("company", "executive"):
         folder = os.path.join(DOCS_ROOT, acl)
         for path in sorted(glob.glob(os.path.join(folder, "*.*"))):
             try:
                 total += ingest_file(path, acl)
             except Exception as e:
+                failures += 1
                 print(f"  ERROR on {path}: {e}", file=sys.stderr)
 
-    save_manifest(new_manifest)   # only after a fully successful pass
+    # Save the manifest ONLY on a clean pass. A manifest saved after failures
+    # (e.g. embeddings not up yet on first boot) poisons state: every later cycle
+    # no-ops while Qdrant stays empty. Unsaved = retried next cycle.
+    if failures:
+        print(f"\n{failures} file(s) failed — manifest NOT saved; retrying next cycle.", file=sys.stderr)
+    else:
+        save_manifest(new_manifest)
     print(f"\nDone. Total chunks upserted: {total}; stale sources removed: {len(stale)}")
     # Show collection stats
     r = requests.get(f"{QDRANT_URL}/collections/{COLLECTION}", headers=HEADERS, timeout=30)
     info = r.json().get("result", {})
     print(f"Collection points count: {info.get('points_count')}")
+    sys.exit(1 if failures else 0)
 
 if __name__ == "__main__":
     main()
@@ -1267,10 +1276,13 @@ n8n → Execute Workflow → pauses at the human hold → Mailpit `http://localh
 | Driver | Reboot between install and use. Known-good = 595. |
 | `.env` edits | `up -d --force-recreate`, never `restart`. |
 | Model verify | `head -c 4` = `GGUF`. Don't trust `file` for this. |
+| Disk full on model download | The root volume must be 200 GB gp3 (Part 0 hardware spec). A default 8 GB AMI volume fails at the model download (or later at `docker compose pull`). Fix without rebuilding: console → EC2 → Volumes → Modify Volume → 200 GiB, then `sudo growpart /dev/nvme0n1 1 && sudo resize2fs /dev/nvme0n1p1`, `rm -rf /opt/ai-stack/models/.cache`, retry. |
+| VRAM on the 48 GB tier (g6e/L40S, 32B model) | Expect ~31–33 GB used, not the 14B/A10G norm (~16,629 MiB). The `over ~21,000 = watch` warning is 24 GB-tier calibration and does not apply. |
 | Minting | `sk-` keys come from a LIVE LiteLLM (`/key/generate`), not openssl. Wait for `"I'm alive!"` first. |
 | Bearer | API key fields take the RAW `sk-`, not `Bearer sk-`. The app adds the header. |
 | ENABLE_SIGNUP true | Intentional until the admin exists. Then OFF in the UI; `pending` role is the backstop. |
 | TEI wait | `Ready` before ingesting; weights are pre-downloaded (§10) and `HF_HUB_OFFLINE=1` is set, so no download lines should appear. |
+| RAG empty + "No document changes" | Poisoned manifest: an early worker cycle ran before embeddings was serving and (pre-fix) saved a 0-point state, so every later cycle no-ops while `points count` stays 0. Current ingest.py only saves the manifest on a clean pass. On an affected box: `sudo rm /opt/ai-stack/ingestion/.ingest-manifest.json` then re-run the exec. |
 | VRAM timing | ~3,1xx MiB right after launch = model still loading. Norm ~16,629 MiB. |
 
 **Startup noise that is NOT a fault:** `register_model ... not in cost map`; Prisma "wolfi" warning; Postgres `locale`/`trust auth` hints; 141 migrations first boot; TEI `Invalid hostname, defaulting to 0.0.0.0`; llama.cpp `LLAMA_ARG_*`/`LLAMA_API_KEY` "overwritten by command line argument" warnings; llama.cpp future-port-9931 deprecation notice; fail2ban Python `SyntaxWarning` wall; HF unauthenticated + CLI upsell; `aplay command not found`; `udevadm hwdb is deprecated`; model logged as backend name `openai/qwen3-14b` (clients use the alias); `/opt/containerd` exists (Docker's runtime dir, not yours).

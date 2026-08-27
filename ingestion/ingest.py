@@ -171,20 +171,29 @@ def main():
         print(f"Removed stale chunks for: {rel}")
 
     total = 0
+    failures = 0
     for acl in ("company", "executive"):
         folder = os.path.join(DOCS_ROOT, acl)
         for path in sorted(glob.glob(os.path.join(folder, "*.*"))):
             try:
                 total += ingest_file(path, acl)
             except Exception as e:
+                failures += 1
                 print(f"  ERROR on {path}: {e}", file=sys.stderr)
 
-    save_manifest(new_manifest)   # only after a fully successful pass
+    # Save the manifest ONLY on a clean pass. A manifest saved after failures
+    # (e.g. embeddings not up yet on first boot) poisons state: every later cycle
+    # no-ops while Qdrant stays empty. Unsaved = retried next cycle.
+    if failures:
+        print(f"\n{failures} file(s) failed — manifest NOT saved; retrying next cycle.", file=sys.stderr)
+    else:
+        save_manifest(new_manifest)
     print(f"\nDone. Total chunks upserted: {total}; stale sources removed: {len(stale)}")
     # Show collection stats
     r = requests.get(f"{QDRANT_URL}/collections/{COLLECTION}", headers=HEADERS, timeout=30)
     info = r.json().get("result", {})
     print(f"Collection points count: {info.get('points_count')}")
+    sys.exit(1 if failures else 0)
 
 if __name__ == "__main__":
     main()
