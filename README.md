@@ -113,7 +113,7 @@ The answers come from the sample documents in `documents/company/` and `document
 sudo docker exec ingestion python3 /app/ingest.py
 ```
 
-`documents/company/` is visible to all users; `documents/executive/` to admins only. Folder name = ACL tag.
+`documents/company/` is visible to all users; `documents/executive/` to admins only. Folder name = ACL tag (subfolders included — files anywhere under those folders get ingested; supported types: pdf, docx, txt/md/markdown, rtf, html, csv, xlsx, pptx, odt).
 
 ## Repository layout
 
@@ -145,5 +145,5 @@ sudo docker exec ingestion python3 /app/ingest.py
 
 - Voice transcription (GPU Whisper) + meeting-notes workflow
 - Speaker diarization
-- Production ingestion: richer file types + OCR via a dedicated pipeline (replacing the built-in extractors), per-file status
+- Production ingestion: OCR for scanned PDFs + legacy .doc/.xls via a dedicated pipeline, per-file status
 - Larger-model tier on a 48GB GPU

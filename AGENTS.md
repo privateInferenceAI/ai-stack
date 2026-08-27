@@ -65,9 +65,11 @@ Healthchecks exist only on postgres (`pg_isready`) and litellm (`/health/livelin
 
 ### Ingestion
 
-- `documents/company/` + `documents/executive/` → text extraction (.pdf/.docx/.txt/.md)
-  → 512-char chunks (64 overlap) → bge-m3 embeddings → Qdrant `company_docs`.
-  Payload `acl` = source folder; deterministic uuid5 point IDs make re-runs idempotent.
+- `documents/company/` + `documents/executive/` (**recursive** — subfolders included)
+  → text extraction (pdf, docx, txt/md/markdown, rtf, html, csv, xlsx, pptx, odt;
+  legacy .doc/.xls skipped) → 512-char chunks (64 overlap) → bge-m3 embeddings →
+  Qdrant `company_docs`. Payload `acl` = top-level folder; uuid5 point IDs on
+  relpath:chunk (same-named files in different subfolders don't collide).
 - Runs automatically every `INGEST_INTERVAL_SECONDS` (default 900s, `.env`-tunable)
   in the ingestion container; a sha256 manifest makes unchanged cycles free, and
   chunks of deleted/changed files are removed. Immediate run:
@@ -166,4 +168,4 @@ dangling `Bug N` comments, and ingestion scheduling (periodic worker + manifest
 - CEO base salary: **$425,000** (`executive` ACL — admin only; non-admins must *not* see it).
 
 Roadmap notes (from README/docs): Whisper voice via speaches (would be container #11),
-richer file-type + OCR ingestion (dedicated pipeline), 48 GB GPU tier.
+OCR + legacy-format ingestion (dedicated pipeline), 48 GB GPU tier (32B test underway).
