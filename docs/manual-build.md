@@ -759,6 +759,10 @@ CHANGELOG:
         being force-answered from random chunks. Retrieval now embeds the last
         rag_context_turns user messages, so follow-ups ("tell me more", "look deeper")
         retrieve what the conversation was actually about.
+- v0.4: Meta-gate. Messages that are ABOUT the conversation itself ("repeat my first two
+        questions", "what did I just ask", "do you remember") skip retrieval entirely —
+        history answers those, and injected chunks can only distract. Deterministic
+        behavior for meta-questions, enforced by code, not by hoping the model copes.
 """
 
 from pydantic import BaseModel, Field
@@ -766,6 +770,18 @@ from typing import Optional
 import os
 import re
 import requests
+
+# CHANGED v0.4: meta/conversational messages skip retrieval entirely. Deliberately
+# conservative: when in doubt we RETRIEVE (a slightly-irrelevant excerpt with the v0.3
+# softened label is a small cost; skipping a real document question is a big one).
+META_PATTERN = re.compile(
+    r"\b(our conversation|this conversation|this chat|previous question|first question|"
+    r"second question|earlier (question|message)|what did i (just )?(say|ask)|"
+    r"repeat (back|my|it|that)|word for word|you (said|told|mentioned)|"
+    r"we (discussed|talked about)|(chat|conversation|session) history|"
+    r"remember (when|that|my)|do you remember|context of (our|this))\b",
+    re.IGNORECASE,
+)
 
 
 class Filter:
@@ -809,6 +825,11 @@ class Filter:
         rag_context_turns: int = Field(
             default=2,
             description="How many recent user messages to embed for retrieval (follow-up context).",
+        )
+        # CHANGED v0.4
+        rag_skip_meta: bool = Field(
+            default=True,
+            description="Skip retrieval for questions about the conversation itself — history answers those.",
         )
         executive_roles: str = Field(
             default="admin",
@@ -931,7 +952,12 @@ class Filter:
             raise Exception(self.valves.refusal_message)
 
         # 2. DOCUMENT CONNECTOR (RAG) — inject role-filtered context
-        if self.valves.enable_rag and user_text:
+        # CHANGED v0.4: meta-gate — questions ABOUT the conversation are answered from
+        # history; injected chunks can only distract there. (Our own previously injected
+        # excerpts remain visible in history, so document recap questions still work.)
+        if self.valves.rag_skip_meta and user_text and META_PATTERN.search(user_text):
+            print("[guardrails] META message — skipping retrieval (answered from history)")
+        elif self.valves.enable_rag and user_text:
             try:
                 role = (__user__ or {}).get("role", "user")
                 exec_roles = [

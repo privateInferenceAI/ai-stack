@@ -20,6 +20,7 @@ what actually happens and the policy becomes a lie.
 | `executive_roles` | `admin` | Comma-separated WebUI roles that may see `executive/`-folder chunks in RAG. Everyone else sees `company/` only. |
 | `rag_top_k` | `10` | Chunks retrieved and injected per message. |
 | `rag_context_turns` | `2` | Recent user messages embedded for retrieval — follow-up questions ("tell me more") retrieve the actual topic instead of junk (v0.3). |
+| `rag_skip_meta` | `true` | Skip retrieval for questions *about the conversation itself* ("repeat my first two questions", "do you remember") — history answers those; deterministic behavior for meta-questions (v0.4). |
 | `enable_rag`, `enable_rerank` | `true` | Feature toggles. |
 | `qdrant_url`, `qdrant_collection`, `qdrant_api_key`, `embed_url`, `rerank_url` | internal service URLs / `company_docs` | Plumbing; rarely changed per client. |
 

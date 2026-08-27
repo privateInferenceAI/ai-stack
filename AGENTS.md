@@ -61,7 +61,9 @@ Healthchecks exist only on postgres (`pg_isready`) and litellm (`/health/livelin
   RAG with role ACL — `admin` role sees `company` + `executive` chunks; everyone else
   sees `company` only. Retrieval embeds the last `rag_context_turns` user messages
   (follow-up-aware), and context is injected as a separate labeled system message —
-  the user's question stays verbatim (v0.3). RAG errors fail open.
+  the user's question stays verbatim (v0.3). Questions *about the conversation*
+  itself skip retrieval entirely — history answers those, deterministically (v0.4
+  meta-gate). RAG errors fail open.
 - `outlet`: regex PII redaction (SSN pattern → `[REDACTED]`).
 - `guardrails/policy.txt` is the human-readable policy mirror. **Policy and code must
   stay in sync** — see `docs/guardrails-customization.md`.
