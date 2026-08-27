@@ -1267,6 +1267,8 @@ n8n → Execute Workflow → pauses at the human hold → Mailpit `http://localh
 | Driver | Reboot between install and use. Known-good = 595. |
 | `.env` edits | `up -d --force-recreate`, never `restart`. |
 | Model verify | `head -c 4` = `GGUF`. Don't trust `file` for this. |
+| Disk full on model download | The root volume must be 200 GB gp3 (Part 0 hardware spec). A default 8 GB AMI volume fails at the model download (or later at `docker compose pull`). Fix without rebuilding: console → EC2 → Volumes → Modify Volume → 200 GiB, then `sudo growpart /dev/nvme0n1 1 && sudo resize2fs /dev/nvme0n1p1`, `rm -rf /opt/ai-stack/models/.cache`, retry. |
+| VRAM on the 48 GB tier (g6e/L40S, 32B model) | Expect ~31–33 GB used, not the 14B/A10G norm (~16,629 MiB). The `over ~21,000 = watch` warning is 24 GB-tier calibration and does not apply. |
 | Minting | `sk-` keys come from a LIVE LiteLLM (`/key/generate`), not openssl. Wait for `"I'm alive!"` first. |
 | Bearer | API key fields take the RAW `sk-`, not `Bearer sk-`. The app adds the header. |
 | ENABLE_SIGNUP true | Intentional until the admin exists. Then OFF in the UI; `pending` role is the backstop. |
