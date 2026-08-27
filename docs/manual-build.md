@@ -30,7 +30,7 @@
 ```bash
 sudo mkdir -p /opt/ai-stack
 sudo touch /opt/ai-stack/install-log.txt
-sudo chown -R $$USER:$$USER /opt/ai-stack
+sudo chown -R $USER:$USER /opt/ai-stack
 ```
 
 (In a root shell, use the literal name: `sudo chown -R ubuntu:ubuntu /opt/ai-stack`.)
@@ -141,7 +141,7 @@ sudo fail2ban-client status sshd
 sudo mkdir -p /opt/ai-stack/models
 sudo touch /opt/ai-stack/.env
 sudo chmod 600 /opt/ai-stack/.env
-sudo chown -R $$USER:$$USER /opt/ai-stack
+sudo chown -R $USER:$USER /opt/ai-stack
 sudo docker network create ai-net
 ```
 
@@ -1034,7 +1034,7 @@ PGPASS=$(openssl rand -hex 24)
 WEBUISEC=$(openssl rand -hex 24)
 QDRANT=$(openssl rand -hex 24)
 N8NENC=$(openssl rand -hex 24)
-echo "generated: $${#LLAMA} $${#MASTER} $${#PGPASS} $${#WEBUISEC} $${#QDRANT} $${#N8NENC}"
+echo "generated: ${#LLAMA} ${#MASTER} ${#PGPASS} ${#WEBUISEC} ${#QDRANT} ${#N8NENC}"
 ```
 
 ✔ EXPECTED: `generated: 48 48 48 48 48 48`.
@@ -1132,9 +1132,9 @@ sudo docker exec litellm python3 -c "import urllib.request; urllib.request.urlop
 ```bash
 MASTER=$(sudo grep '^LITELLM_MASTER_KEY=' /opt/ai-stack/.env | cut -d= -f2)
 echo "$MASTER"
-WK=$$(curl -s -X POST http://localhost:4000/key/generate -H "Authorization: Bearer $$MASTER" -H "Content-Type: application/json" -d '{"models":["company-ai"]}' | jq -r .key)
+WK=$(curl -s -X POST http://localhost:4000/key/generate -H "Authorization: Bearer $MASTER" -H "Content-Type: application/json" -d '{"models":["company-ai"]}' | jq -r .key)
 echo "$WK"
-NK=$$(curl -s -X POST http://localhost:4000/key/generate -H "Authorization: Bearer $$MASTER" -H "Content-Type: application/json" -d '{"models":["company-ai"]}' | jq -r .key)
+NK=$(curl -s -X POST http://localhost:4000/key/generate -H "Authorization: Bearer $MASTER" -H "Content-Type: application/json" -d '{"models":["company-ai"]}' | jq -r .key)
 echo "$NK"
 ```
 
@@ -1165,27 +1165,26 @@ sudo docker logs embeddings 2>&1 | tail -3
 
 ✔ EXPECTED: ends in `Ready`. Weights are pre-downloaded (section 10) and the containers run `HF_HUB_OFFLINE=1`, so `Ready` should appear quickly with **no download lines**. The `WARN ... Invalid hostname, defaulting to 0.0.0.0` line just before `Ready` is cosmetic.
 
-## 7.2 — Run the ingestion
+## 7.2 — Verify the ingestion (the worker usually gets there first)
+
+The ingestion container is a **worker**: it runs `ingest.py` at container start, then every `INGEST_INTERVAL_SECONDS` (default 900). With pre-downloaded TEI models, embeddings is `Ready` in seconds — so the first scheduled cycle has usually already seeded Qdrant by the time you get here.
 
 ▶ TERMINAL:
 ```bash
-cd /opt/ai-stack && sudo docker compose up -d ingestion
 sudo docker exec ingestion python3 /app/ingest.py
 ```
 
-✔ EXPECTED:
-```text
-Created collection 'company_docs' (size=1024, cosine)
-Ingesting [company] expense-policy.txt ...
-  OK: 1 chunks from expense-policy.txt
-Ingesting [executive] exec-comp.txt ...
-  OK: 1 chunks from exec-comp.txt
+✔ EXPECTED — either of these is healthy:
+- `No document changes since last run; nothing to do.` ← the usual one: the worker's first cycle already ingested everything (the worker doing its job)
+- the full first run — `Created collection 'company_docs' (size=1024, cosine)` … `Done. Total chunks upserted: 2` — you beat the worker to it
 
-Done. Total chunks upserted: 2
-Collection points count: 2
+To watch the worker's own runs (first cycle, retries, later pickups):
+```bash
+sudo docker logs ingestion | tail -20
 ```
+(A cycle that fires before Qdrant/embeddings are up logs `ingest run failed — retrying next cycle` and heals itself on a later run.)
 
-The collection must be size **1024** (bge-m3's output). A vector-dimension error means a wrong-size collection already exists — delete and recreate it. The script takes no arguments; it walks `/documents/company` and `/documents/executive` itself and tags `acl` from the folder name. After this first manual run, the ingestion **worker** takes over: it re-runs `ingest.py` every `INGEST_INTERVAL_SECONDS` (default 900; tune via `.env`), no-ops when nothing changed (sha256 manifest), and removes chunks for deleted or changed files. Later document drops need no command — wait for the next cycle, or re-run the exec for immediate pickup.
+The collection must be size **1024** (bge-m3's output). A vector-dimension error means a wrong-size collection already exists — delete and recreate it. The script walks `/documents/company` and `/documents/executive` itself and tags `acl` from the folder name. Later document drops need no command — the worker picks them up next cycle (default 15 min; tune `INGEST_INTERVAL_SECONDS` via `.env`) — the exec remains the immediate option.
 
 ---
 

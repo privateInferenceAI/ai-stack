@@ -71,7 +71,9 @@ Healthchecks exist only on postgres (`pg_isready`) and litellm (`/health/livelin
 - Runs automatically every `INGEST_INTERVAL_SECONDS` (default 900s, `.env`-tunable)
   in the ingestion container; a sha256 manifest makes unchanged cycles free, and
   chunks of deleted/changed files are removed. Immediate run:
-  `docker exec ingestion python3 /app/ingest.py`.
+  `docker exec ingestion python3 /app/ingest.py`. At install, the worker's first
+  cycle races the manual seed — `No document changes since last run` from the exec
+  means the worker already won; both outcomes are healthy.
 
 ## Repository layout
 
@@ -134,7 +136,8 @@ documents, exports — **not** the 9 GB model. **Restore:** `sudo ./restore.sh <
 - **Doc/script embedding:** `docs/manual-build.md` and `docs/scripted-build.md` embed
   copies of the scripts and compose file. Embedded copies must be **byte-exact** —
   after editing either side, run `python3 scripts/check-doc-sync.py` (exits 1 on
-  drift; `--write` regenerates embedded copies from the real files).
+  drift; `--write` regenerates embedded copies from the real files; also lints
+  prose for leftover `$$` escaping artifacts).
 
 ## Known issues / gotchas
 
