@@ -1,13 +1,19 @@
 """
 title: Company Guardrails + RAG
 author: ai-stack
-version: 0.2
+version: 0.3
 description: Input guardrails (topic denial, injection), RAG injection from Qdrant with role-based ACL, output PII redaction.
 
 CHANGELOG:
 - v0.2: Changed rag_top_k from 3 to 10. Restructured ACL search to use Qdrant "should" filter
         so all users get the same retrieval count (ACL controls visibility, not volume).
         Previously: looped per-ACL with per-ACL limit, then truncated — gave admins more results by accident.
+- v0.3: Conversation-aware injection. Retrieved context now arrives as a SEPARATE labeled
+        system message before the user's question (which stays verbatim) — the wrapper can
+        no longer be mistaken for a conversation turn, and conversational/meta messages stop
+        being force-answered from random chunks. Retrieval now embeds the last
+        rag_context_turns user messages, so follow-ups ("tell me more", "look deeper")
+        retrieve what the conversation was actually about.
 """
 
 from pydantic import BaseModel, Field
@@ -53,6 +59,12 @@ class Filter:
         # Rationale: 32k context has room; reranker works better with larger pool;
         # production needs better recall than 3 chunks provides.
         rag_top_k: int = Field(default=10, description="Number of chunks to retrieve and inject.")
+        # CHANGED v0.3: retrieval uses the last N user messages so follow-up questions
+        # ("tell me more", "anything else") pull chunks about the actual topic.
+        rag_context_turns: int = Field(
+            default=2,
+            description="How many recent user messages to embed for retrieval (follow-up context).",
+        )
         executive_roles: str = Field(
             default="admin",
             description="Comma-separated roles that get the 'executive' ACL filter; all others get 'company'.",
@@ -151,6 +163,16 @@ class Filter:
                 return m.get("content", "")
         return ""
 
+    def _recent_user_text(self, body: dict, n: int) -> str:
+        """The last n user messages, chronological, each capped — the retrieval query
+        for follow-up-aware RAG (v0.3)."""
+        texts = [
+            m.get("content", "")[:300]
+            for m in body.get("messages", [])
+            if m.get("role") == "user"
+        ]
+        return "\n".join(t for t in texts[-n:] if t)
+
     # ---------------- hooks ----------------
 
     def inlet(self, body: dict, __user__: Optional[dict] = None) -> dict:
@@ -174,13 +196,16 @@ class Filter:
                 ]
                 # executives see company + executive; everyone else sees company only
                 acls = ["company", "executive"] if role in exec_roles else ["company"]
-                vec = self._embed(user_text)
+                # CHANGED v0.3: retrieval embeds the last N user turns so follow-up
+                # questions ("tell me more") retrieve the actual topic, not junk.
+                query_text = self._recent_user_text(body, self.valves.rag_context_turns) or user_text
+                vec = self._embed(query_text)
 
                 # CHANGED v0.2: single search with should-filter, no loop, no truncation.
                 # Previously: looped per-ACL, merged, truncated to rag_top_k.
                 # Now: one search returns up to rag_top_k total, mixed by relevance.
                 hits = self._search(vec, acls)
-                hits = self._rerank(user_text, hits)
+                hits = self._rerank(query_text, hits)
 
                 acl = "+".join(acls)  # for the log line below
                 if hits:
@@ -188,16 +213,22 @@ class Filter:
                         h["payload"]["text"] for h in hits if h.get("payload")
                     )
                     if context.strip():
+                        # CHANGED v0.3: context goes in a SEPARATE labeled system message
+                        # placed just before the user's question (which stays verbatim).
+                        # The wrapper can no longer be mistaken for a conversation turn,
+                        # and conversational messages stop being force-answered from chunks.
                         prefix = (
-                            "Answer the user's question using the company information below. "
-                            "Quote or paraphrase the relevant line directly. "
-                            "Only say you do not have the information if the text below truly does not address the question at all.\n\n"
-                            f"--- COMPANY INFORMATION ---\n{context}\n--- END ---\n\n"
+                            "REFERENCE EXCERPTS from company documents, retrieved for the user's "
+                            "next message. Use them when they are relevant. Ignore them for "
+                            "conversational questions (about this chat itself, preferences, or "
+                            "earlier turns). If none of the excerpts address the question, say "
+                            "you don't have that information in the documents.\n\n"
+                            f"--- COMPANY INFORMATION ---\n{context}\n--- END ---"
                         )
-                        # prepend context to the last user message
-                        for m in reversed(body.get("messages", [])):
-                            if m.get("role") == "user":
-                                m["content"] = prefix + m.get("content", "")
+                        messages = body.get("messages", [])
+                        for i in range(len(messages) - 1, -1, -1):
+                            if messages[i].get("role") == "user":
+                                messages.insert(i, {"role": "system", "content": prefix})
                                 break
                         print(
                             f"[guardrails] RAG injected {len(hits)} chunk(s) with acl={acl}"
