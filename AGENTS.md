@@ -31,8 +31,9 @@ outlet: PII redaction) → LiteLLM :4000 → llama.cpp :8080 (Qwen3-14B)
 RAG path (inside the guardrails function):
 
 ```
-query → TEI embeddings → Qdrant company_docs (role-filtered ACL) → TEI reranker
-→ top-10 chunks prepended to the user message
+query (last rag_context_turns user messages) → TEI embeddings → Qdrant company_docs
+(role-filtered ACL) → TEI reranker → top-10 chunks injected as a labeled system
+message before the user's (verbatim) question
 ```
 
 | Service | Image / build | Host port | GPU | Purpose |
@@ -58,7 +59,11 @@ Healthchecks exist only on postgres (`pg_isready`) and litellm (`/health/livelin
   `QDRANT_API_KEY` set.
 - `inlet`: substring-match input denial (SSNs, prompt injection, salary probes), then
   RAG with role ACL — `admin` role sees `company` + `executive` chunks; everyone else
-  sees `company` only. RAG errors fail open.
+  sees `company` only. Retrieval embeds the last `rag_context_turns` user messages
+  (follow-up-aware), and context is injected as a separate labeled system message —
+  the user's question stays verbatim (v0.3). Questions *about the conversation*
+  itself skip retrieval entirely — history answers those, deterministically (v0.4
+  meta-gate). RAG errors fail open.
 - `outlet`: regex PII redaction (SSN pattern → `[REDACTED]`).
 - `guardrails/policy.txt` is the human-readable policy mirror. **Policy and code must
   stay in sync** — see `docs/guardrails-customization.md`.
