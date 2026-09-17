@@ -84,12 +84,17 @@ if [[ ! -x "$HF_BIN" && -x "$OWNER_HOME/.local/bin/huggingface-cli" ]]; then
 fi
 
 # 5a. LLM GGUF
-MODEL="$STACK/models/Qwen3-14B-Q4_K_M.gguf"
+# MODEL_FILE can be set before this script runs (e.g. sudo MODEL_FILE=... ./phase1b.sh)
+# or written to /opt/ai-stack/.env. Default is the 14B A10G-friendly model.
+MODEL_FILE="${MODEL_FILE:-Qwen3-14B-Q4_K_M.gguf}"
+# Derive the HuggingFace repo name from the filename, e.g. Qwen3-32B-Q4_K_M.gguf -> Qwen3-32B-GGUF
+HF_REPO="$(printf '%s' "$MODEL_FILE" | sed -E 's/(Qwen3-[0-9]+B)-.*/\1-GGUF/')"
+MODEL="$STACK/models/$MODEL_FILE"
 if [[ -f "$MODEL" ]] && head -c 4 "$MODEL" 2>/dev/null | grep -q GGUF; then
-  log "Model already present and valid, skipping download."
+  log "Model $MODEL_FILE already present and valid, skipping download."
 else
-  log "Downloading Qwen3-14B Q4_K_M (~9GB, this is the long pole)..."
-  sudo -u "$OWNER" env HOME="$OWNER_HOME" "$HF_BIN" download Qwen/Qwen3-14B-GGUF Qwen3-14B-Q4_K_M.gguf --local-dir "$STACK/models"
+  log "Downloading $MODEL_FILE (this is the long pole)..."
+  sudo -u "$OWNER" env HOME="$OWNER_HOME" "$HF_BIN" download "Qwen/$HF_REPO" "$MODEL_FILE" --local-dir "$STACK/models"
 fi
 if head -c 4 "$MODEL" 2>/dev/null | grep -q GGUF; then
   log "Model verified (GGUF header present)."

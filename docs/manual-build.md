@@ -4,6 +4,23 @@
 **The scripted version of this build is the Scripted Build Guide. The clone/DR version is the Backup & Restore Guide.**
 **Hardware:** AWS g5.2xlarge (A10G 24GB, 8 vCPU, 32GB RAM, 200GB gp3), Ubuntu 24.04, Elastic IP, security group inbound 22 only. **~$1.21/hr running — stop the instance when idle (~$20/mo stopped).**
 
+### Choose your model tier (do this now)
+
+The default is the **14B tier**, sized for the A10G. If you are building on a **48 GB GPU** (e.g. AWS g6e.2xlarge with L40S), you can select the **32B tier** for stronger reasoning.
+
+| Tier | GPU | `MODEL_FILE` | VRAM at canary | Use case |
+|---|---|---|---|---|
+| **14B (default)** | A10G 24 GB | `Qwen3-14B-Q4_K_M.gguf` | ~16,6xx MiB | Small office, general use |
+| **32B** | L40S 48 GB | `Qwen3-32B-Q4_K_M.gguf` | ~31,000–33,000 MiB | Larger office, heavier reasoning |
+
+**To use 32B, export `MODEL_FILE` before the download step (step 10):**
+
+```bash
+export MODEL_FILE=Qwen3-32B-Q4_K_M.gguf
+```
+
+The examples below default to 14B. Substitute `$MODEL_FILE` for the literal filename when running the commands.
+
 ---
 
 ## HOW TO USE THIS DOCUMENT
@@ -145,7 +162,7 @@ sudo chown -R $USER:$USER /opt/ai-stack
 sudo docker network create ai-net
 ```
 
-## 10. Model download (~9 GB — the long pole)
+## 10. Model download (the long pole)
 
 ▶ TERMINAL:
 ```bash
@@ -157,19 +174,21 @@ python3 -m pip install --user --break-system-packages huggingface_hub
 
 ▶ TERMINAL (still as ubuntu, no sudo):
 ```bash
-~/.local/bin/hf download Qwen/Qwen3-14B-GGUF Qwen3-14B-Q4_K_M.gguf --local-dir /opt/ai-stack/models
+MODEL_FILE="${MODEL_FILE:-Qwen3-14B-Q4_K_M.gguf}"
+HF_REPO="$(printf '%s' "$MODEL_FILE" | sed -E 's/(Qwen3-[0-9]+B)-.*/\1-GGUF/')"
+~/.local/bin/hf download "Qwen/$HF_REPO" "$MODEL_FILE" --local-dir /opt/ai-stack/models
 ```
 
 (If `hf` isn't found: `~/.local/bin/huggingface-cli download ...`, same arguments.)
 
-✔ EXPECTED: ~9 GB at EC2 bandwidth (under a minute), then `✓ Downloaded /opt/ai-stack/models/Qwen3-14B-Q4_K_M.gguf`. HF's unauthenticated-request warning and CLI upsell hint: normal.
+✔ EXPECTED: ~9 GB at EC2 bandwidth for 14B (under a minute), ~21 GB for 32B, then `✓ Downloaded /opt/ai-stack/models/$MODEL_FILE`. HF's unauthenticated-request warning and CLI upsell hint: normal.
 
 ✔ VERIFY (do not trust `file` for this — it misidentifies GGUF):
 ```bash
-ls -lh /opt/ai-stack/models/Qwen3-14B-Q4_K_M.gguf
-head -c 4 /opt/ai-stack/models/Qwen3-14B-Q4_K_M.gguf; echo
+ls -lh "/opt/ai-stack/models/${MODEL_FILE:-Qwen3-14B-Q4_K_M.gguf}"
+head -c 4 "/opt/ai-stack/models/${MODEL_FILE:-Qwen3-14B-Q4_K_M.gguf}"; echo
 ```
-→ ~8–9 GB file; prints `GGUF`.
+→ ~8–9 GB for 14B, ~20–21 GB for 32B; prints `GGUF`.
 
 **TEI models (embeddings + reranker) — same idea, smaller downloads.** Pre-download them now so the TEI containers never touch the network at boot (compose mounts this cache at `/data` and sets `HF_HUB_OFFLINE=1`):
 
@@ -681,7 +700,7 @@ cat > /opt/ai-stack/litellm/config.yaml << 'EOF'
 model_list:
   - model_name: company-ai
     litellm_params:
-      model: openai/qwen3-14b
+      model: os.environ/MODEL_NAME
       api_base: http://llamacpp:8080/v1
       api_key: os.environ/LLAMA_API_KEY
       input_cost_per_token: 0.000001
@@ -1060,7 +1079,7 @@ services:
     volumes:
       - /opt/ai-stack/models:/models:ro
     command: >
-      --model /models/Qwen3-14B-Q4_K_M.gguf
+      --model /models/${MODEL_FILE:-Qwen3-14B-Q4_K_M.gguf}
       --host 0.0.0.0
       --port 8080
       --ctx-size 32768

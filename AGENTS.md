@@ -25,7 +25,7 @@ Chat request path:
 
 ```
 Browser → Open WebUI :3000 → guardrails function (inlet: denial + RAG injection,
-outlet: PII redaction) → LiteLLM :4000 → llama.cpp :8080 (Qwen3-14B)
+outlet: PII redaction) → LiteLLM :4000 → llama.cpp :8080 (Qwen3-14B/32B)
 ```
 
 RAG path (inside the guardrails function):
@@ -38,8 +38,8 @@ message before the user's (verbatim) question
 
 | Service | Image / build | Host port | GPU | Purpose |
 |---|---|---|---|---|
-| llamacpp | `ghcr.io/ggml-org/llama.cpp` (digest-pinned) | 8080 | ✓ | llama.cpp server, `Qwen3-14B-Q4_K_M.gguf`, ctx 32768 |
-| litellm | `ghcr.io/berriai/litellm` (digest-pinned) | 4000 | | Gateway; single model `company-ai` → `openai/qwen3-14b` @ `http://llamacpp:8080/v1` |
+| llamacpp | `ghcr.io/ggml-org/llama.cpp` (digest-pinned) | 8080 | ✓ | llama.cpp server, `Qwen3-14B/32B-Q4_K_M.gguf` via `MODEL_FILE`, ctx 32768 |
+| litellm | `ghcr.io/berriai/litellm` (digest-pinned) | 4000 | | Gateway; single model `company-ai` → `openai/qwen3-{14,32}b` via `MODEL_NAME` @ `http://llamacpp:8080/v1` |
 | postgres | `postgres:16-alpine` | — | | LiteLLM DB (keys, spend); deliberately unpublished |
 | open-webui | `ghcr.io/open-webui/open-webui` (digest-pinned) | 3000 | | Chat UI; model-filtered to `company-ai`; signups default `pending`; telemetry off |
 | qdrant | `qdrant/qdrant:v1.11.3` | — | | Vector DB; collection `company_docs` (1024-dim, cosine) |
@@ -106,15 +106,27 @@ docs/                           manual-build.md, scripted-build.md, backup-resto
 
 ## Build & run
 
-**Target host:** Ubuntu 24.04 + NVIDIA GPU. Dev/test box is an AWS g5.2xlarge
-(A10G 24 GB VRAM, 8 vCPU, 32 GB RAM) — size models to that ceiling. ~200 GB disk.
+**Target host:** Ubuntu 24.04 + NVIDIA GPU. Dev/test boxes: AWS g5.2xlarge
+(A10G 24 GB VRAM, 8 vCPU, 32 GB RAM) and g6e.2xlarge (L40S 48 GB, 8 vCPU, 64 GB RAM)
+— size models to the tier's ceiling. ~200 GB disk (a default 8 GB AMI volume fails
+at the model download — resize first).
+
+**Model tiers** (select with the `MODEL_FILE` env var before running `phase1b.sh`
+  or `pathb.sh`; default is 14B):
+- **14B tier (A10G 24 GB, default):** `MODEL_FILE=Qwen3-14B-Q4_K_M.gguf` — VRAM norm
+  ~16.6 GB, warn over ~21,000 MiB.
+- **32B tier (L40S 48 GB):** `MODEL_FILE=Qwen3-32B-Q4_K_M.gguf` — VRAM norm ~31–33 GB
+  (the 21,000 warning is 24 GB-tier calibration and does not apply). The repo and
+  LiteLLM model identifier are derived automatically from the filename.
+  Watch item: Qwen3.8-27B as the next 24 GB-tier model.
 
 Scripted path (canonical; full detail in `docs/scripted-build.md`):
 
 1. Copy repo contents to the **top level** of `/opt/ai-stack` (required layout).
 2. `sudo ./phase1a.sh` → reboot → `sudo ./phase1b.sh`
    (installs Docker, NVIDIA container toolkit, UFW/fail2ban, creates `ai-net`,
-   downloads the ≈9 GB Qwen3-14B GGUF).
+   downloads the default ≈9 GB Qwen3-14B GGUF). For 32B, set
+   `MODEL_FILE=Qwen3-32B-Q4_K_M.gguf` before running `phase1b.sh`.
 3. `sudo bash ./pathb.sh` → gittar → genenv → build ingestion image →
    `docker compose up -d` → waits for llamacpp model-ready → mints LiteLLM virtual
    keys for WebUI/n8n → seeds Qdrant. Success = `containers: 10/10`.

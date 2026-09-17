@@ -16,7 +16,7 @@ services:
     volumes:
       - /opt/ai-stack/models:/models:ro
     command: >
-      --model /models/Qwen3-14B-Q4_K_M.gguf
+      --model /models/${MODEL_FILE:-Qwen3-14B-Q4_K_M.gguf}
       --host 0.0.0.0
       --port 8080
       --ctx-size 32768
