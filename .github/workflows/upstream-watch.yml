@@ -1,0 +1,44 @@
+name: upstream-watch
+
+# Lane 1 of the tech watch — every Monday 09:00 ET (13:00 UTC).
+# Checks pinned components against upstream releases (scripts/check-upstream.py)
+# and files an issue only when something needs action.
+
+on:
+  schedule:
+    - cron: "0 13 * * 1"
+  workflow_dispatch:
+
+permissions:
+  issues: write
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Ensure the tech-watch label exists
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh label create tech-watch --color 0e8a16 --description "Tech watch (lanes 1+2)" || true
+
+      - name: Run upstream watch
+        id: watch
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -o pipefail
+          python3 scripts/check-upstream.py | tee report.md
+        continue-on-error: true
+
+      - name: File issue when action is needed
+        if: steps.watch.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TITLE="Upstream watch — $(date +%Y-%m-%d)"
+          OPEN=$(gh issue list --search "$TITLE in:title" --state open --json title --jq 'length')
+          if [ "$OPEN" = "0" ]; then
+            gh issue create --title "$TITLE" --body-file report.md --label tech-watch
+          fi

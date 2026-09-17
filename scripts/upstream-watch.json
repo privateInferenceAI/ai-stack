@@ -1,0 +1,10 @@
+[
+  { "service": "llamacpp",   "repo": "ggml-org/llama.cpp",          "ours": "pinned 2026-08-07 (:server-cuda)", "ours_version": null,      "ours_date": "2026-08-07", "track": "security-only" },
+  { "service": "litellm",    "repo": "berriai/litellm",             "ours": "pinned 2026-08-07 (:main-stable)", "ours_version": null,      "ours_date": "2026-08-07", "track": "security-only" },
+  { "service": "open-webui", "repo": "open-webui/open-webui",       "ours": "v0.11.0",                          "ours_version": "0.11.0",  "ours_date": "2026-08-07", "track": "version" },
+  { "service": "postgres",   "repo": "postgres/postgres",           "ours": "16",                               "ours_version": "16",      "ours_date": "2026-08-07", "track": "version", "tag_regex": "^REL_16_\\d+$" },
+  { "service": "qdrant",     "repo": "qdrant/qdrant",               "ours": "v1.11.3",                          "ours_version": "1.11.3",  "ours_date": "2026-08-07", "track": "version" },
+  { "service": "tei (embeddings + reranker)", "repo": "huggingface/text-embeddings-inference", "ours": "1.6",   "ours_version": "1.6",     "ours_date": "2026-08-07", "track": "version" },
+  { "service": "n8n",        "repo": "n8n-io/n8n",                  "ours": "pinned 2026-08-07 (:latest)",      "ours_version": null,      "ours_date": "2026-08-07", "track": "security-only" },
+  { "service": "mailpit",    "repo": "axllent/mailpit",             "ours": "pinned 2026-08-07 (:latest)",      "ours_version": null,      "ours_date": "2026-08-07", "track": "security-only" }
+]

@@ -4,6 +4,9 @@
 
 **Private AI Stack**: a self-hosted, docker-compose AI stack for small businesses —
 chat UI, LLM gateway, guardrails, RAG over company documents, and workflow automation.
+An **Office Inference** product. This repo is the local/privacy tier; the cloud tier
+(same stack, cloud LLM, no GPU) lives at
+[`privateInferenceAI/office-inference-cloud`](https://github.com/privateInferenceAI/office-inference-cloud).
 
 **Hard constraint: customer data never leaves the building.**
 
@@ -106,8 +109,18 @@ docs/                           manual-build.md, scripted-build.md, backup-resto
 
 ## Build & run
 
-**Target host:** Ubuntu 24.04 + NVIDIA GPU. Dev/test box is an AWS g5.2xlarge
-(A10G 24 GB VRAM, 8 vCPU, 32 GB RAM) — size models to that ceiling. ~200 GB disk.
+**Target host:** Ubuntu 24.04 + NVIDIA GPU. Dev/test boxes: AWS g5.2xlarge
+(A10G 24 GB VRAM, 8 vCPU, 32 GB RAM) and g6e.2xlarge (L40S 48 GB, 8 vCPU, 64 GB RAM)
+— size models to the tier's ceiling. ~200 GB disk (a default 8 GB AMI volume fails
+at the model download — resize first).
+
+**Model tiers** (swap by recipe; parameterization via `MODEL_FILE` is on the roadmap):
+- **14B tier (A10G 24 GB):** default `Qwen3-14B-Q4_K_M.gguf` — VRAM norm ~16.6 GB,
+  warn over ~21,000 MiB.
+- **32B tier (L40S 48 GB):** `hf download Qwen/Qwen3-32B-GGUF Qwen3-32B-Q4_K_M.gguf
+  --local-dir /opt/ai-stack/models`; compose `--model /models/Qwen3-32B-Q4_K_M.gguf`;
+  litellm `model: openai/qwen3-32b`. VRAM norm ~31–33 GB (the 21,000 warning does
+  not apply). Watch item: Qwen3.8-27B as the next 24 GB-tier model.
 
 Scripted path (canonical; full detail in `docs/scripted-build.md`):
 

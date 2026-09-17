@@ -746,7 +746,7 @@ cat > /opt/ai-stack/guardrails/guardrails-function.py << 'EOF'
 """
 title: Company Guardrails + RAG
 author: ai-stack
-version: 0.3
+version: 0.4
 description: Input guardrails (topic denial, injection), RAG injection from Qdrant with role-based ACL, output PII redaction.
 
 CHANGELOG:
