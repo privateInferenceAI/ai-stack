@@ -4,6 +4,25 @@
 **For restoring an existing box's accounts/data, use the Backup & Restore Guide.**
 **Hardware:** AWS g5.2xlarge (A10G 24GB, 8 vCPU, 32GB RAM, 200GB gp3), Ubuntu 24.04, Elastic IP, security group inbound 22 only. **~$1.21/hr running — stop the instance when idle (~$20/mo stopped).**
 
+### Choose your model tier (do this now)
+
+The default is the **14B tier**, sized for the A10G. If you are building on a **48 GB GPU** (e.g. AWS g6e.2xlarge with L40S), you can select the **32B tier** for stronger reasoning.
+
+| Tier | GPU | MODEL_FILE | VRAM at canary | Use case |
+|---|---|---|---|---|
+| **14B (default)** | A10G 24 GB | `Qwen3-14B-Q4_K_M.gguf` | ~16,6xx MiB | Small office, general use |
+| **32B** | L40S 48 GB | `Qwen3-32B-Q4_K_M.gguf` | ~31,000–33,000 MiB | Larger office, heavier reasoning |
+
+**To use 32B, set `MODEL_FILE` before running `phase1b.sh`:**
+
+```bash
+export MODEL_FILE=Qwen3-32B-Q4_K_M.gguf
+```
+
+Then use `sudo -E ./phase1b.sh` so the variable survives sudo. If you already ran `phase1b.sh` with the default, just run the build with 14B; changing tiers on an existing box requires replacing the `.gguf` in `/opt/ai-stack/models` and re-running `pathb.sh`.
+
+`pathb.sh` automatically detects whichever model `phase1b.sh` downloaded and writes the matching `MODEL_NAME` into `.env`, so the LiteLLM gateway routes `company-ai` to the correct backend identifier.
+
 ---
 
 ## HOW TO USE THIS DOCUMENT
@@ -73,7 +92,7 @@ sudo /home/ubuntu/phase1b.sh
 - NVIDIA Container Toolkit installed, `Wrote updated config to /etc/docker/daemon.json`, Docker restarted
 - UFW active (SSH only inbound), fail2ban running. **A wall of Python `SyntaxWarning` lines during the fail2ban install is normal** — Python 3.12 linting fail2ban's own test files.
 - `ai-net created.`
-- Model download (~9 GB, under a minute at EC2 bandwidth): `✓ Downloaded /opt/ai-stack/models/Qwen3-14B-Q4_K_M.gguf` → `Model verified (GGUF header present).`
+- Model download (default ~9 GB, under a minute at EC2 bandwidth; ~21 GB for 32B): `✓ Downloaded /opt/ai-stack/models/<MODEL_FILE>` → `Model verified (GGUF header present).`
 - Verification summary: `GPU visible inside a container: NVIDIA A10G`, Docker/Compose/driver versions.
 - HF's "unauthenticated requests" warning and its CLI upsell hint: normal.
 
@@ -105,7 +124,8 @@ sudo bash /opt/ai-stack/pathb.sh
 == gittar: creating runtime directories
 == gittar: done. Next: sudo bash /opt/ai-stack/genenv.sh (or pathb.sh)
 == generating fresh .env (secrets born on this box)
-genenv: wrote /opt/ai-stack/.env (mode 600). keys=11 empty=0
+== model tier: <MODEL_FILE> (<MODEL_NAME>)
+genenv: wrote /opt/ai-stack/.env (mode 600). keys=13 empty=0
 == building ingestion image
 [+] Building 7.6s (7/7) FINISHED
 == bringing stack up (LiteLLM will run 141 migrations — give it a minute)
@@ -125,21 +145,23 @@ Ingesting [executive] exec-comp.txt ...
 Done. Total chunks upserted: 2
 Collection points count: 2
 == containers: 10/10
-== VRAM used: 16629 MiB (norm ~16,6xx; over ~21,000 = watch the GPU budget)
+== VRAM used: 16629 MiB (14B tier norm ~16,6xx; over ~21,000 = watch the GPU budget)
+# For 32B you will see ~31,000–33,000 MiB instead; the 21,000 warning is 24 GB-tier calibration.
 ```
 
 **Notes:**
 
-- The script creates the runtime directories (gittar), writes 11 keys into `.env` (genenv — `keys=11 empty=0` is the pass condition), builds the ingestion image, starts the stack, **waits for LiteLLM and for the model to finish loading** (probe from inside `ai-net`), mints and injects the two virtual keys, then seeds the two sample documents.
+- The script creates the runtime directories (gittar), writes 13 keys into `.env` (genenv — `keys=13 empty=0` is the pass condition), builds the ingestion image, starts the stack, **waits for LiteLLM and for the model to finish loading** (probe from inside `ai-net`), mints and injects the two virtual keys, then seeds the two sample documents.
 - **141 migrations** on LiteLLM's first boot is one-time. Several minutes of activity is normal — do not interrupt.
-- **The VRAM line should now read ~16,6xx MiB at the canary** — pathb waits for llamacpp to report model-ready before seeding, so mapping is done by then. If it still reads ~3,1xx, the model is still loading (the wait loop will have logged a WARNING). Confirm for yourself:
+- **The VRAM line should now read ~16,6xx MiB at the canary for 14B** (~31,000–33,000 MiB for 32B) — pathb waits for llamacpp to report model-ready before seeding, so mapping is done by then. If it still reads ~3,1xx, the model is still loading (the wait loop will have logged a WARNING). Confirm for yourself:
 
   ```bash
   nvidia-smi --query-gpu=memory.used,memory.total --format=csv
   docker logs llamacpp --tail 5
   ```
 
-  ✔ Expected: `16629 MiB, 23028 MiB` (give or take a few MiB), and `llama_server: listening on http://0.0.0.0:8080` in the log.
+  ✔ Expected (14B): `16629 MiB, 23028 MiB` (give or take a few MiB), and `llama_server: listening on http://0.0.0.0:8080` in the log.
+  ✔ Expected (32B): ~31,000–33,000 MiB on an L40S, and the same `llama_server: listening` log line.
 - **`== seeding Qdrant` may print the full first run (`Created collection …`) or `No document changes since last run; nothing to do.`** The ingestion worker fires at stack-up and races pathb's seed step — both outputs are healthy; the documents end up seeded either way.
 - The `LLAMA_ARG_HOST / LLAMA_API_KEY ... overwritten by command line argument` warnings and llama.cpp's future-port-9931 notice: cosmetic — the compose sets both env and CLI args; the CLI wins.
 
@@ -429,12 +451,17 @@ if [[ ! -x "$HF_BIN" && -x "$OWNER_HOME/.local/bin/huggingface-cli" ]]; then
 fi
 
 # 5a. LLM GGUF
-MODEL="$STACK/models/Qwen3-14B-Q4_K_M.gguf"
+# MODEL_FILE can be set before this script runs (e.g. sudo MODEL_FILE=... ./phase1b.sh)
+# or written to /opt/ai-stack/.env. Default is the 14B A10G-friendly model.
+MODEL_FILE="${MODEL_FILE:-Qwen3-14B-Q4_K_M.gguf}"
+# Derive the HuggingFace repo name from the filename, e.g. Qwen3-32B-Q4_K_M.gguf -> Qwen3-32B-GGUF
+HF_REPO="$(printf '%s' "$MODEL_FILE" | sed -E 's/(Qwen3-[0-9]+B)-.*/\1-GGUF/')"
+MODEL="$STACK/models/$MODEL_FILE"
 if [[ -f "$MODEL" ]] && head -c 4 "$MODEL" 2>/dev/null | grep -q GGUF; then
-  log "Model already present and valid, skipping download."
+  log "Model $MODEL_FILE already present and valid, skipping download."
 else
-  log "Downloading Qwen3-14B Q4_K_M (~9GB, this is the long pole)..."
-  sudo -u "$OWNER" env HOME="$OWNER_HOME" "$HF_BIN" download Qwen/Qwen3-14B-GGUF Qwen3-14B-Q4_K_M.gguf --local-dir "$STACK/models"
+  log "Downloading $MODEL_FILE (this is the long pole)..."
+  sudo -u "$OWNER" env HOME="$OWNER_HOME" "$HF_BIN" download "Qwen/$HF_REPO" "$MODEL_FILE" --local-dir "$STACK/models"
 fi
 if head -c 4 "$MODEL" 2>/dev/null | grep -q GGUF; then
   log "Model verified (GGUF header present)."
@@ -527,8 +554,19 @@ gen() { openssl rand -hex 24; }   # 48 hex chars, URL-safe
 
 LLAMA=$(gen); PGPASS=$(gen); WEBUISEC=$(gen); QDRANT=$(gen); N8NENC=$(gen)
 
+# Model tier: change MODEL_FILE before the first build to select the 32B tier
+# (requires an L40S-class 48 GB GPU). Default is the 14B A10G-friendly model.
+MODEL_FILE=${MODEL_FILE:-Qwen3-14B-Q4_K_M.gguf}
+# Derive the LiteLLM model identifier from the GGUF filename,
+# e.g. Qwen3-14B-Q4_K_M.gguf -> openai/qwen3-14b
+MODEL_NAME="openai/$(printf '%s' "$MODEL_FILE" | sed -E 's/Qwen3-([0-9]+)B-.*/qwen3-\1b/')"
+
 sudo tee "$STACK/.env" >/dev/null <<EOF
 LLAMA_API_KEY=$LLAMA
+
+# --- Section 2: LLM model tier ---
+MODEL_FILE=$MODEL_FILE
+MODEL_NAME=$MODEL_NAME
 
 # --- Section 3: LiteLLM gateway ---
 LITELLM_MASTER_KEY=sk-$(gen)
@@ -551,12 +589,12 @@ EOF
 sudo chmod 600 "$STACK/.env"
 sudo chown "${SUDO_USER:-$USER}:${SUDO_USER:-$USER}" "$STACK/.env"
 
-# verify: 11 keys, none empty
+# verify: 13 keys, none empty
 # (the count pattern must include 0-9 or the digit-bearing N8N_* keys don't count)
 MISSING=$(sudo grep -cE '=$' "$STACK/.env" || true)
 COUNT=$(sudo grep -cE '^[A-Z0-9_]+=' "$STACK/.env" || true)
 echo "genenv: wrote $STACK/.env (mode 600). keys=$COUNT empty=$MISSING"
-[[ "$COUNT" -ge 11 && "$MISSING" -eq 0 ]] || { echo "ERROR: env incomplete"; exit 1; }
+[[ "$COUNT" -ge 13 && "$MISSING" -eq 0 ]] || { echo "ERROR: env incomplete"; exit 1; }
 ```
 
 ### pathb.sh — fresh-install orchestrator
@@ -585,6 +623,15 @@ bash "$STACK/gittar.sh"
 # --- fresh secrets ---
 log "generating fresh .env (secrets born on this box)"
 bash "$STACK/genenv.sh"
+
+# Sync .env to the model that phase1b actually downloaded. genenv defaults to the
+# 14B tier, but if the builder selected 32B we want the runtime env to match.
+GGUF=$(ls "$STACK"/models/*.gguf 2>/dev/null | head -1)
+MODEL_FILE=$(basename "$GGUF")
+MODEL_NAME="openai/$(printf '%s' "$MODEL_FILE" | sed -E 's/Qwen3-([0-9]+)B-.*/qwen3-\1b/')"
+sed -i "s|^MODEL_FILE=.*|MODEL_FILE=$MODEL_FILE|" "$STACK/.env"
+sed -i "s|^MODEL_NAME=.*|MODEL_NAME=$MODEL_NAME|" "$STACK/.env"
+log "model tier: $MODEL_FILE ($MODEL_NAME)"
 
 # --- build ingestion image + bring stack up (first boot: 141 migrations) ---
 log "building ingestion image"
@@ -637,11 +684,15 @@ log "seeding Qdrant (collection: company_docs; acl from folder name)"
 docker exec ingestion python3 /app/ingest.py
 
 # --- canary + VRAM note ---
-# NOTE: the model-ready wait above means VRAM should already read ~16,6xx here.
+# The model-ready wait above means VRAM should already be near the steady-state value.
 # ~3,1xx = the wait timed out; the model is still loading (check: docker logs llamacpp).
 log "containers: $(docker ps -q | wc -l)/10"
 VRAM=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits)
-log "VRAM used: ${VRAM} MiB (norm ~16,6xx; over ~21,000 = watch the GPU budget)"
+if [[ "$MODEL_FILE" == Qwen3-32B-* ]]; then
+  log "VRAM used: ${VRAM} MiB (32B tier norm ~31,000-33,000; ignore the 24 GB-tier 21,000 warning)"
+else
+  log "VRAM used: ${VRAM} MiB (14B tier norm ~16,6xx; over ~21,000 = watch the GPU budget)"
+fi
 
 cat <<DONE
 

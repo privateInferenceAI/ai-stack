@@ -22,6 +22,15 @@ bash "$STACK/gittar.sh"
 log "generating fresh .env (secrets born on this box)"
 bash "$STACK/genenv.sh"
 
+# Sync .env to the model that phase1b actually downloaded. genenv defaults to the
+# 14B tier, but if the builder selected 32B we want the runtime env to match.
+GGUF=$(ls "$STACK"/models/*.gguf 2>/dev/null | head -1)
+MODEL_FILE=$(basename "$GGUF")
+MODEL_NAME="openai/$(printf '%s' "$MODEL_FILE" | sed -E 's/Qwen3-([0-9]+)B-.*/qwen3-\1b/')"
+sed -i "s|^MODEL_FILE=.*|MODEL_FILE=$MODEL_FILE|" "$STACK/.env"
+sed -i "s|^MODEL_NAME=.*|MODEL_NAME=$MODEL_NAME|" "$STACK/.env"
+log "model tier: $MODEL_FILE ($MODEL_NAME)"
+
 # --- build ingestion image + bring stack up (first boot: 141 migrations) ---
 log "building ingestion image"
 docker build -t ai-stack-ingestion "$STACK/ingestion"
@@ -73,11 +82,15 @@ log "seeding Qdrant (collection: company_docs; acl from folder name)"
 docker exec ingestion python3 /app/ingest.py
 
 # --- canary + VRAM note ---
-# NOTE: the model-ready wait above means VRAM should already read ~16,6xx here.
+# The model-ready wait above means VRAM should already be near the steady-state value.
 # ~3,1xx = the wait timed out; the model is still loading (check: docker logs llamacpp).
 log "containers: $(docker ps -q | wc -l)/10"
 VRAM=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits)
-log "VRAM used: ${VRAM} MiB (norm ~16,6xx; over ~21,000 = watch the GPU budget)"
+if [[ "$MODEL_FILE" == Qwen3-32B-* ]]; then
+  log "VRAM used: ${VRAM} MiB (32B tier norm ~31,000-33,000; ignore the 24 GB-tier 21,000 warning)"
+else
+  log "VRAM used: ${VRAM} MiB (14B tier norm ~16,6xx; over ~21,000 = watch the GPU budget)"
+fi
 
 cat <<DONE
 

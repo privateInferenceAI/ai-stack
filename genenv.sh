@@ -9,8 +9,19 @@ gen() { openssl rand -hex 24; }   # 48 hex chars, URL-safe
 
 LLAMA=$(gen); PGPASS=$(gen); WEBUISEC=$(gen); QDRANT=$(gen); N8NENC=$(gen)
 
+# Model tier: change MODEL_FILE before the first build to select the 32B tier
+# (requires an L40S-class 48 GB GPU). Default is the 14B A10G-friendly model.
+MODEL_FILE=${MODEL_FILE:-Qwen3-14B-Q4_K_M.gguf}
+# Derive the LiteLLM model identifier from the GGUF filename,
+# e.g. Qwen3-14B-Q4_K_M.gguf -> openai/qwen3-14b
+MODEL_NAME="openai/$(printf '%s' "$MODEL_FILE" | sed -E 's/Qwen3-([0-9]+)B-.*/qwen3-\1b/')"
+
 sudo tee "$STACK/.env" >/dev/null <<EOF
 LLAMA_API_KEY=$LLAMA
+
+# --- Section 2: LLM model tier ---
+MODEL_FILE=$MODEL_FILE
+MODEL_NAME=$MODEL_NAME
 
 # --- Section 3: LiteLLM gateway ---
 LITELLM_MASTER_KEY=sk-$(gen)
@@ -33,9 +44,9 @@ EOF
 sudo chmod 600 "$STACK/.env"
 sudo chown "${SUDO_USER:-$USER}:${SUDO_USER:-$USER}" "$STACK/.env"
 
-# verify: 11 keys, none empty
+# verify: 13 keys, none empty
 # (the count pattern must include 0-9 or the digit-bearing N8N_* keys don't count)
 MISSING=$(sudo grep -cE '=$' "$STACK/.env" || true)
 COUNT=$(sudo grep -cE '^[A-Z0-9_]+=' "$STACK/.env" || true)
 echo "genenv: wrote $STACK/.env (mode 600). keys=$COUNT empty=$MISSING"
-[[ "$COUNT" -ge 11 && "$MISSING" -eq 0 ]] || { echo "ERROR: env incomplete"; exit 1; }
+[[ "$COUNT" -ge 13 && "$MISSING" -eq 0 ]] || { echo "ERROR: env incomplete"; exit 1; }
