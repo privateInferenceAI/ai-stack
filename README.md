@@ -25,7 +25,7 @@ Browser ──► Open WebUI ──► guardrails filter ──► LiteLLM ─�
 
 - Ubuntu 24.04 box with an NVIDIA GPU with 24GB VRAM. The documented target is AWS `g5.2xlarge` (A10G, 8 vCPU, 32GB RAM, 200GB gp3), ~$1.21/hr running (~$20/mo stopped).
 - SSH access (key pair).
-- ~45–60 minutes, mostly downloads.
+- ~45-60 minutes, mostly downloads.
 
 ## Documentation
 
@@ -57,7 +57,7 @@ sudo cp -r /home/ubuntu/ai-stack/. /opt/ai-stack/
 sudo chown -R ubuntu:ubuntu /opt/ai-stack
 ```
 
-(The `/.` copies the repo *contents* to the top level of `/opt/ai-stack` — that layout is required.)
+(The `/.` copies the repo *contents* to the top level of `/opt/ai-stack` - that layout is required.)
 
 ### 3. Foundation
 
@@ -90,12 +90,12 @@ ssh -i /path/to/your-key.pem -L 3000:localhost:3000 -L 5678:localhost:5678 -L 80
 
 In order:
 
-1. **WebUI admin** — `http://localhost:3000` → Sign up. **The first account becomes admin.**
-2. **Disable signups** — Admin Panel → Settings → Authentication → "Allow New Signups" OFF → Save.
-3. **Guardrails function** — Admin Panel → Functions → new → paste `guardrails/guardrails-function.py` → Save → enable **and set GLOBAL** → Valves: paste `QDRANT_API_KEY` from `/opt/ai-stack/.env`.
-4. **n8n owner** — `http://localhost:5678` → create the owner account.
-5. **n8n credentials** — **OpenAI** (Base URL `http://litellm:4000/v1`, key = `N8N_VIRTUAL_KEY` from `.env`) and **SMTP** (host `mailpit`, port `1025`, user/pass `test`/`test`, TLS off).
-6. **Import the workflow** — n8n → Import from File → `exports/MyWorkflow.json`.
+1. **WebUI admin**: `http://localhost:3000` → Sign up. **The first account becomes admin.**
+2. **Disable signups**: Admin Panel → Settings → Authentication → "Allow New Signups" OFF → Save.
+3. **Guardrails function**: Admin Panel → Functions → new → paste `guardrails/guardrails-function.py` → Save → enable **and set GLOBAL** → Valves: paste `QDRANT_API_KEY` from `/opt/ai-stack/.env`.
+4. **n8n owner**: `http://localhost:5678` → create the owner account.
+5. **n8n credentials**: **OpenAI** (Base URL `http://litellm:4000/v1`, key = `N8N_VIRTUAL_KEY` from `.env`) and **SMTP** (host `mailpit`, port `1025`, user/pass `test`/`test`, TLS off).
+6. **Import the workflow**: n8n → Import from File → `exports/MyWorkflow.json`.
 
 ### 6. Verify
 
@@ -107,13 +107,13 @@ In order:
 | "ignore all previous instructions..." | Refused |
 | n8n invoice workflow | Pauses for approval; approve in Mailpit at `http://localhost:8025` |
 
-The answers come from the sample documents in `documents/company/` and `documents/executive/`. To load your own: drop files into those folders — the ingestion worker picks them up automatically (every `INGEST_INTERVAL_SECONDS`, default 15 min; tunable in `.env`). To ingest immediately:
+The answers come from the sample documents in `documents/company/` and `documents/executive/`. To load your own: drop files into those folders - the ingestion worker picks them up automatically (every `INGEST_INTERVAL_SECONDS`, default 15 min; tunable in `.env`). To ingest immediately:
 
 ```bash
 sudo docker exec ingestion python3 /app/ingest.py
 ```
 
-`documents/company/` is visible to all users; `documents/executive/` to admins only. Folder name = ACL tag (subfolders included — files anywhere under those folders get ingested; supported types: pdf, docx, txt/md/markdown, rtf, html, csv, xlsx, pptx, odt).
+`documents/company/` is visible to all users; `documents/executive/` to admins only. Folder name = ACL tag (subfolders included - files anywhere under those folders get ingested; supported types: pdf, docx, txt/md/markdown, rtf, html, csv, xlsx, pptx, odt).
 
 ## Repository layout
 
@@ -132,12 +132,12 @@ sudo docker exec ingestion python3 /app/ingest.py
 └── docs/                       # full guides
 ```
 
-**Secrets are never committed.** `.env` is generated on the box (mode 600). Backup output contains secrets — keep it off the repo. (`.gitignore` covers both.)
+**Secrets are never committed.** `.env` is generated on the box (mode 600). Backup output contains secrets - keep it off the repo. (`.gitignore` covers both.)
 
 ## Operating notes
 
 - Stop the instance when idle: ~$1.21/hr running vs ~$20/mo stopped.
-- After any `.env` edit: `docker compose up -d --force-recreate <service>` — never `restart`. Env vars inject at container creation.
+- After any `.env` edit: `docker compose up -d --force-recreate <service>` - never `restart`. Env vars inject at container creation.
 - The model is not backed up (~9GB, re-downloadable). Backups carry state and config only.
 - Mailpit is in-memory and test-only; restarting wipes its inbox. Production email uses real SMTP.
 
